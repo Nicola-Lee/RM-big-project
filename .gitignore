@@ -1,0 +1,23 @@
+# 构建目录
+**/build/
+
+# 编译产物
+*.o
+*.obj
+*.elf
+*.hex
+*.bin
+*.map
+*.a
+
+# CMake / Ninja 生成文件
+**/CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+cmake_install.cmake
+build.ninja
+.ninja_deps
+.ninja_log
+
+# 本机编辑器配置
+.vscode/
