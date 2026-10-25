@@ -19,9 +19,154 @@
 #include "iwdg.h"
 #include "ins_motor.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
+#include <cstdint>
+#include "ins_comm.hpp"
+#include "usart.h"
+#include "tick.hpp"
 
 /* Exported function definitions ---------------------------------------------*/
 static volatile bool comm_initialized = false;
+static constexpr uint16_t kRemoteRxBufferSize = 128;//DMA缓存区容量
+static uint8_t remote_rx_buffer[kRemoteRxBufferSize] = {0};//数据写入
+static uint16_t remote_frame_length = 0;//目前缓存中已有几个字节
+static uint16_t remote_rx_last_pos = 0;//上次处理到的DMA缓冲区位置
+static uint8_t remote_frame_buffer[hello_world::remote_control::kRcRxDataLen] = {0};//暂存的DBUS数据
+static volatile uint32_t remote_valid_frame_count = 0;//累计的有效帧数
+static volatile uint32_t remote_last_valid_rx_ms = 0;//最近一次收到控制帧的时间
+static volatile bool remote_has_valid_frame = false;//上电后是否受到过有效帧
+static volatile bool remote_rx_started = false;//UART DMA接收是否已经启动
+static bool remote_frame_aligned = false;//是否已经对齐到DBUS帧头
+static constexpr uint32_t kRemoteOfflineTimeoutMs = 100;//遥控器离线判定阈值
+
+static constexpr uint32_t kRemoteRetryIntervalMs = 10;//恢复失败后尝试时间的间隔
+static uint32_t remote_last_retry_ms = 0;//上次尝试重新启动接收的时间
+
+static volatile uint32_t remote_uart_error_count = 0;//调试参数：错误次数
+static volatile uint32_t remote_last_uart_error = HAL_UART_ERROR_NONE;//最近一次错误码
+
+bool GetRemoteControlSnapshot(RemoteControlSnapshot &snapshot)
+{
+  // 默认离线，所有控制量为零
+  RemoteControlSnapshot result{};
+
+  // 保存原中断状态，再短暂关闭中断
+  const uint32_t saved_primask = __get_PRIMASK();
+  __disable_irq();
+
+  const uint32_t now = hello_world::tick::GetTickMs();
+
+  result.last_valid_rx_ms = remote_last_valid_rx_ms;
+  result.valid_frame_count = remote_valid_frame_count;
+
+  // 必须已初始化、接收已启动、收到过有效帧，而且没有超时
+  if (comm_initialized &&
+      remote_rx_started &&
+      huart3.RxState == HAL_UART_STATE_BUSY_RX &&
+      remote_has_valid_frame &&
+      static_cast<uint32_t>(now - result.last_valid_rx_ms) <
+          kRemoteOfflineTimeoutMs) {
+
+    const auto *remote = GetRemoteControl();
+
+    result.rc_lv = remote->rc_lv();
+    result.rc_lh = remote->rc_lh();
+    result.rc_rv = remote->rc_rv();
+    result.rc_rh = remote->rc_rh();
+    result.rc_wheel = remote->rc_wheel();
+
+    result.rc_l_switch =
+        static_cast<uint8_t>(remote->rc_l_switch());
+
+    result.rc_r_switch =
+        static_cast<uint8_t>(remote->rc_r_switch());
+
+    result.online = true;
+  }
+
+  // 恢复进入函数前的中断状态
+  __set_PRIMASK(saved_primask);
+
+  snapshot = result;
+  return result.online;
+}
+
+extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart != &huart3) {
+    return;
+  }
+
+  // 立即让读取接口返回离线
+  remote_rx_started = false;
+  remote_has_valid_frame = false;
+
+  remote_last_uart_error = huart->ErrorCode;
+  remote_uart_error_count = remote_uart_error_count + 1;
+
+  // 不在中断中阻塞重试，由主循环负责恢复
+}
+
+
+// 只能从主循环调用
+void RemoteControlRxPoll(void)
+{
+  if (!comm_initialized) {
+    return;
+  }
+
+  // 正常运行时不停止、不重启 DMA
+  if (remote_rx_started &&
+      huart3.RxState == HAL_UART_STATE_BUSY_RX) {
+    return;
+  }
+
+  const uint32_t now = hello_world::tick::GetTickMs();
+
+  if (static_cast<uint32_t>(now - remote_last_retry_ms) <
+      kRemoteRetryIntervalMs) {
+    return;
+  }
+
+  remote_last_retry_ms = now;
+
+  // 恢复期间保持离线
+  uint32_t saved_primask = __get_PRIMASK();
+  __disable_irq();
+
+  remote_rx_started = false;
+  remote_has_valid_frame = false;
+
+  __set_PRIMASK(saved_primask);
+
+  // 此函数可能等待 DMA 停止，所以必须在主循环中执行
+  if (HAL_UART_AbortReceive(&huart3) != HAL_OK) {
+    return;
+  }
+
+  // 旧接收停止后，丢弃旧的拼帧状态
+  remote_rx_last_pos = 0;
+  remote_frame_length = 0;
+  remote_frame_aligned = false;
+
+  const uint32_t errors_before = remote_uart_error_count;
+
+  const HAL_StatusTypeDef status = HAL_UARTEx_ReceiveToIdle_DMA(
+      &huart3,
+      remote_rx_buffer,
+      kRemoteRxBufferSize
+  );
+
+  saved_primask = __get_PRIMASK();
+  __disable_irq();
+
+  // 防止启动期间发生的新错误被成功返回值覆盖
+  remote_rx_started =
+      (status == HAL_OK &&
+       remote_uart_error_count == errors_before &&
+       huart3.RxState == HAL_UART_STATE_BUSY_RX);
+
+  __set_PRIMASK(saved_primask);
+}
 
 void CommTaskInit(void) {
   /* TODO【新人任务】:
@@ -57,8 +202,37 @@ void CommTaskInit(void) {
     Error_Handler();
   }
 
+  GetRemoteControl();
+  //初始化接收状态
+  remote_rx_last_pos = 0;
+  remote_frame_length = 0;
+  remote_valid_frame_count = 0;
+  remote_last_valid_rx_ms = 0;
+  remote_has_valid_frame = false;
+  remote_rx_started = false;
+  remote_frame_aligned = false;
+
+  remote_last_retry_ms = hello_world::tick::GetTickMs();
+  remote_uart_error_count = 0;
+  remote_last_uart_error = HAL_UART_ERROR_NONE;
+
+  HAL_StatusTypeDef rx_status = HAL_UARTEx_ReceiveToIdle_DMA(
+      &huart3,
+      remote_rx_buffer,
+      kRemoteRxBufferSize
+  );
+
+  const uint32_t saved_primask = __get_PRIMASK();
+  __disable_irq();
+
+  remote_rx_started =
+      (rx_status == HAL_OK &&
+      remote_uart_error_count == 0 &&
+      huart3.RxState == HAL_UART_STATE_BUSY_RX);
+
+  __set_PRIMASK(saved_primask);
+
   comm_initialized = true;
-  //遥控接收也还没写
 }
 
 void CommTask(void) {
@@ -81,26 +255,26 @@ void CommTask(void) {
   if (yaw == nullptr || pitch == nullptr) {
     return;
   }
-// 先检查空闲再编码
-if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) > 0) {
-  yaw->setInput(0.0f);//目前先出零
-  yaw->disable();
+  // 先检查空闲再编码
+  if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) > 0) {
+    yaw->setInput(0.0f);//目前先出零
+    yaw->disable();
 
-  uint8_t data[8] = {0};
-  if (yaw->encode(data)) {
-    CAN_Send_Msg(&hcan1, data, yaw->tx_id(), 8);
+    uint8_t data[8] = {0};
+    if (yaw->encode(data)) {
+      CAN_Send_Msg(&hcan1, data, yaw->tx_id(), 8);
+    }
   }
-}
 
-if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan2) > 0) {
-  pitch->setInput(0.0f);
-  pitch->disable();
+  if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan2) > 0) {
+    pitch->setInput(0.0f);
+    pitch->disable();
 
-  uint8_t data[8] = {0};
-  if (pitch->encode(data)) {
-    CAN_Send_Msg(&hcan2, data, pitch->tx_id(), 8);
+    uint8_t data[8] = {0};
+    if (pitch->encode(data)) {
+      CAN_Send_Msg(&hcan2, data, pitch->tx_id(), 8);
+    }
   }
-}
 
   HAL_IWDG_Refresh(&hiwdg);
   //还差双板协议编码
@@ -114,3 +288,147 @@ if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan2) > 0) {
  * 注意：CAN 的接收分发在 src/HW_can.cpp 的两个回调里（电机 decode / 双板协议解码），
  *      不要在这里重复写 CAN 接收逻辑。
  */
+// 处理 DMA 缓冲区中的新增数据
+
+static bool IsRemoteFrameValid(const uint8_t *data)//字段合理性检查
+{
+  //取出四个摇杆通道和一个拨轮通道的原始值
+  const uint16_t channels[5] = {
+      static_cast<uint16_t>(
+          (data[0] | (data[1] << 8)) & 0x07FF),
+
+      static_cast<uint16_t>(
+          ((data[1] >> 3) | (data[2] << 5)) & 0x07FF),
+
+      static_cast<uint16_t>(
+          ((data[2] >> 6) | (data[3] << 2) |
+           (data[4] << 10)) & 0x07FF),
+
+      static_cast<uint16_t>(
+          ((data[4] >> 1) | (data[5] << 7)) & 0x07FF),
+
+      static_cast<uint16_t>(
+          data[16] | (data[17] << 8))
+  };
+
+  //按现有解码器的 1024 ± 660 检查名义通道范围
+  for (uint16_t channel : channels) {
+    if (channel < 364 || channel > 1684) {
+      return false;
+    }
+  }
+
+  //两个拨杆的合法值为 1、2、3，不能为 0
+  const uint8_t left_switch = (data[5] >> 6) & 0x03;
+  const uint8_t right_switch = (data[5] >> 4) & 0x03;
+
+  if (left_switch == 0 || right_switch == 0) {
+    return false;
+  }
+
+  //鼠标按键字段只能为 0 或 1
+  if (data[12] > 1 || data[13] > 1) {
+    return false;
+  }
+
+  return true;
+}
+
+static void ProcessRemoteRxByte(uint8_t byte)
+{
+  //尚未确定帧起点时，不接收可能错位的数据
+  if (!remote_frame_aligned) {
+    return;
+  }
+
+  //将新字节放入拼帧缓存
+  remote_frame_buffer[remote_frame_length++] = byte;
+
+  //不足 18 字节，继续等待后面的字节
+  if (remote_frame_length <
+      hello_world::remote_control::kRcRxDataLen) {
+    return;
+  }
+
+  //已经凑齐 18 字节，为下一帧复位计数
+  remote_frame_length = 0;
+
+  //异常帧不解码、不刷新有效接收时间
+  if (!IsRemoteFrameValid(remote_frame_buffer)) {
+    remote_frame_aligned = false;
+    return;
+  }
+
+  //完整且有效，立即解码
+  GetRemoteControl()->decode(remote_frame_buffer);
+
+  //只在有效帧到来时更新这些状态
+  remote_last_valid_rx_ms = hello_world::tick::GetTickMs();
+  remote_has_valid_frame = true;
+  remote_valid_frame_count = remote_valid_frame_count + 1;
+}
+
+static void ProcessRemoteRxPosition(uint16_t position, bool idle_event)
+{
+  if (position == 0 || position > kRemoteRxBufferSize) {
+    return;
+  }
+
+  if (position > remote_rx_last_pos) {
+    //没有越过数组边界，直接处理两次位置之间的数据
+    for (uint16_t i = remote_rx_last_pos; i < position; ++i) {
+      ProcessRemoteRxByte(remote_rx_buffer[i]);
+    }
+
+  } else if (position < remote_rx_last_pos) {
+    //越过边界，先处理缓冲区末尾
+    for (uint16_t i = remote_rx_last_pos;
+         i < kRemoteRxBufferSize; ++i) {
+      ProcessRemoteRxByte(remote_rx_buffer[i]);
+    }
+
+    //再处理缓冲区开头
+    for (uint16_t i = 0; i < position; ++i) {
+      ProcessRemoteRxByte(remote_rx_buffer[i]);
+    }
+  }
+  remote_rx_last_pos = position;
+
+  //如果空闲，丢弃残余数据，重置拼帧状态
+  if (idle_event) {
+  remote_frame_length = 0;
+  remote_frame_aligned = true;
+  }
+}
+
+
+extern "C" void HAL_UARTEx_RxEventCallback(
+    UART_HandleTypeDef *huart, uint16_t Size)
+{
+  if (huart != &huart3 || !remote_rx_started) {
+    return;
+  }
+
+  if (Size == 0 || Size > kRemoteRxBufferSize) {
+    return;
+  }
+
+  HAL_UART_RxEventTypeTypeDef event =
+      HAL_UARTEx_GetRxEventType(huart);
+
+  switch (event) {
+    case HAL_UART_RXEVENT_HT:    // DMA 写到缓冲区一半
+    case HAL_UART_RXEVENT_TC:    // DMA 写到缓冲区末尾
+    case HAL_UART_RXEVENT_IDLE:  // 串口检测到空闲
+      ProcessRemoteRxPosition(
+          Size,
+          event == HAL_UART_RXEVENT_IDLE
+      );
+      break;
+
+    default:
+      break;
+  }
+
+  // 循环 DMA 会继续接收，这里不重新启动 DMA。
+}

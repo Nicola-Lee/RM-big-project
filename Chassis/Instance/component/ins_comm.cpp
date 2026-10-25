@@ -33,7 +33,8 @@ hello_world::remote_control::DT7 *GetRemoteControl() {
    *   - DT7 只负责解码 18 字节 DBUS，串口收发在 Task/component/comm_task.cpp 完成。
    *   - 解码入口：Task/component/comm_task.cpp 的 HAL_UARTEx_RxEventCallback。
    */
-  return nullptr;
+  static hello_world::remote_control::DT7 remote_control;
+  return &remote_control;
 }
 
 /* Private function definitions ----------------------------------------------*/

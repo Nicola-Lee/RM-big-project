@@ -1,3 +1,11 @@
+/*
+ * @Author: Nicola Lee nlee15428@gmail.com
+ * @Date: 2026-09-19 15:52:24
+ * @LastEditors: Nicola Lee nlee15428@gmail.com
+ * @LastEditTime: 2026-10-25 21:23:14
+ * @FilePath: \omni_skeleton\Gimbal\Instance\component\ins_pid.cpp
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ */
 /**
  *******************************************************************************
  * @file      :ins_pid.cpp
@@ -31,14 +39,45 @@ hello_world::pid::Pid *GetPidMotorYaw() {
    *      的返回类型以匹配你的类名）。
    *   2. 静态定义各控制回路的 PID 对象并整定参数（考核会检查稳 / 快 / 无超调）。
    */
-  return nullptr;
+  static const hello_world::pid::PidParams params{
+      .kp = 0.0f,
+      .ki = 0.0f,
+      .kd = 0.0f,
+      .integral_limit = 0.0f,
+      .output_limit = 0.0f
+  };
+
+  static hello_world::pid::Pid pid(params);
+  return &pid;
 }
 
 hello_world::pid::Pid *GetPidMotorPitch() {
   /* TODO【新人任务】:
    * 返回 pitch 关节位置环 PID 单例，做法同 GetPidMotorYaw()。
    */
-  return nullptr;
+  static const hello_world::pid::PidParams params{
+      .kp = 0.0f,
+      .ki = 0.0f,
+      .kd = 0.0f,
+      .integral_limit = 0.0f,
+      .output_limit = 0.0f
+  };
+
+  static hello_world::pid::Pid pid(params);
+  return &pid;
 }
 
 /* Private function definitions ----------------------------------------------*/
+void ResetGimbalPids()
+{
+  auto *yaw_pid = GetPidMotorYaw();
+  auto *pitch_pid = GetPidMotorPitch();
+
+  if (yaw_pid != nullptr) {
+    yaw_pid->reset();
+  }
+
+  if (pitch_pid != nullptr) {
+    pitch_pid->reset();
+  }
+}

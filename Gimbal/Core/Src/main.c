@@ -34,6 +34,7 @@
  * 它声明了 extern "C" 的 MainTaskInit(void) / MainTask(void)。
  */
 #include "main_task.hpp"
+#include "comm_task.hpp"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -129,7 +130,7 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-
+    RemoteControlRxPoll();
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */

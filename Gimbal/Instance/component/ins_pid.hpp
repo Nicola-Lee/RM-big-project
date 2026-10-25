@@ -17,6 +17,7 @@
 #define GIMBAL_INSTANCE_INS_PID_HPP_
 
 /* Includes ------------------------------------------------------------------*/
+#include "pid.hpp"
 
 /* Exported macro ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
@@ -33,4 +34,5 @@ hello_world::pid::Pid *GetPidMotorYaw();
 /* 获取 pitch 关节位置环 PID 单例。 */
 hello_world::pid::Pid *GetPidMotorPitch();
 
+void ResetGimbalPids();
 #endif /* GIMBAL_INSTANCE_INS_PID_HPP_ */

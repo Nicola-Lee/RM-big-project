@@ -1,3 +1,11 @@
+/*
+ * @Author: Nicola Lee nlee15428@gmail.com
+ * @Date: 2026-09-19 15:52:24
+ * @LastEditors: Nicola Lee nlee15428@gmail.com
+ * @LastEditTime: 2026-10-23 21:16:03
+ * @FilePath: \omni_skeleton\Gimbal\Instance\component\ins_comm.cpp
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ */
 /**
  *******************************************************************************
  * @file      :ins_comm.cpp
@@ -33,7 +41,8 @@ hello_world::remote_control::DT7 *GetRemoteControl() {
    *   - DT7 只负责解码 18 字节 DBUS，串口收发在 Task/component/comm_task.cpp 完成。
    *   - 解码入口：Task/component/comm_task.cpp 的 HAL_UARTEx_RxEventCallback。
    */
-  return nullptr;
+  static hello_world::remote_control::DT7 remote_control;
+  return &remote_control;
 }
 
 /* Private function definitions ----------------------------------------------*/

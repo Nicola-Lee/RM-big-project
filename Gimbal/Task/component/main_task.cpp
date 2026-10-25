@@ -16,6 +16,8 @@
 #include "main_task.hpp"
 #include "comm_task.hpp"
 #include "tim.h"
+#include "ins_pid.hpp"
+
 /* Exported function definitions ---------------------------------------------*/
 void MainTaskInit(void) {
   /* TODO【新人任务】:
@@ -26,6 +28,9 @@ void MainTaskInit(void) {
    *   3. 调用 CommTaskInit() 完成通讯初始化（UART 接收、IWDG 等）。
    * 注意：不要在这里写任何周期性逻辑。
    */
+  GetPidMotorYaw();
+  GetPidMotorPitch();
+
   CommTaskInit();
 }
 
