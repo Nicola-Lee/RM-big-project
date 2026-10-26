@@ -36,21 +36,23 @@ void Pid::reset()
   has_last_error_ = false;
 }
 
-float Pid::calculate(float target, float feedback, float dt_s)
+float Pid::calculate(float target, float feedback, float dt_s,
+                     float feedforward)
 {
   if (!std::isfinite(target) || !std::isfinite(feedback)) {
     reset();
     return 0.0f;
   }
 
-  return calculateError(target - feedback, dt_s);
+  return calculateError(target - feedback, dt_s, feedforward);
 }
 
-float Pid::calculateError(float error, float dt_s)
+float Pid::calculateError(float error, float dt_s, float feedforward)
 {
   // 周期必须是有限正数，误差也必须有效
   if (!std::isfinite(error) ||
       !std::isfinite(dt_s) ||
+      !std::isfinite(feedforward) ||
       dt_s <= 0.0f) {
     reset();
     return 0.0f;
@@ -63,7 +65,7 @@ float Pid::calculateError(float error, float dt_s)
     d = params_.kd * ((error - last_error_) / dt_s);
   }
 
-  const float base = p + d;
+  const float base = p + d + feedforward;
 
   const float integral_raw =
       integral_output_ + params_.ki * error * dt_s;

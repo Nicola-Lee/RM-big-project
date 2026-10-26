@@ -294,6 +294,143 @@ void BMI088::getData(
   }
 }
 
+bool BMI088::getDataChecked(float acc_data[3],
+                           float gyro_data[3],
+                           float *temperature) const
+{
+  if (hspi_ == nullptr ||
+      acc_cs_port_ == nullptr ||
+      gyro_cs_port_ == nullptr) {
+    return false;
+  }
+
+  // 读取加速度计寄存器，检查 SPI 通信结果。
+  auto read_acc = [this](uint8_t reg,
+                         uint8_t len,
+                         uint8_t *data) {
+    uint8_t command[2] = {
+        static_cast<uint8_t>(reg | kReadSign),
+        kPaddingValue
+    };
+    uint8_t dummy[2] = {0};
+
+    accCsL();
+
+    // 加速度计读取需要发送寄存器地址和一个 dummy 字节。
+    HAL_StatusTypeDef status = HAL_SPI_TransmitReceive(
+        hspi_,
+        command,
+        dummy,
+        2,
+        kSpiTimeout);
+
+    if (status == HAL_OK) {
+      status = HAL_SPI_TransmitReceive(
+          hspi_,
+          kPaddingData,
+          data,
+          len,
+          kSpiTimeout);
+    }
+
+    accCsH();
+
+    return status == HAL_OK;
+  };
+
+  // 读取陀螺仪寄存器，检查 SPI 通信结果。
+  auto read_gyro = [this](uint8_t reg,
+                          uint8_t len,
+                          uint8_t *data) {
+    uint8_t command = static_cast<uint8_t>(reg | kReadSign);
+
+    gyroCsL();
+
+    HAL_StatusTypeDef status = HAL_SPI_Transmit(
+        hspi_,
+        &command,
+        1,
+        kSpiTimeout);
+
+    if (status == HAL_OK) {
+      status = HAL_SPI_TransmitReceive(
+          hspi_,
+          kPaddingData,
+          data,
+          len,
+          kSpiTimeout);
+    }
+
+    gyroCsH();
+
+    return status == HAL_OK;
+  };
+
+  // 加速度：原始值换算成 m/s²，再转换安装坐标系。
+  if (acc_data != nullptr) {
+    uint8_t raw[6] = {0};
+    float data[3] = {0.0f, 0.0f, 0.0f};
+
+    tick::DelayUs(kCommWaitTimeUs);
+
+    if (!read_acc(BMI088_ACC_ACC_X_LSB, 6, raw)) {
+      return false;
+    }
+
+    for (uint8_t i = 0; i < 3; ++i) {
+      const int16_t raw_value = static_cast<int16_t>(
+          raw[2 * i] | (raw[2 * i + 1] << 8));
+
+      data[i] = kAccSens[config_.acc_range] * raw_value;
+    }
+
+    arm_mat_vec_mult_f32(&rot_mat_, data, acc_data);
+  }
+
+  // 角速度：原始值换算成 rad/s，再转换安装坐标系。
+  if (gyro_data != nullptr) {
+    uint8_t raw[6] = {0};
+    float data[3] = {0.0f, 0.0f, 0.0f};
+
+    tick::DelayUs(kCommWaitTimeUs);
+
+    if (!read_gyro(BMI088_GYRO_RATE_X_LSB, 6, raw)) {
+      return false;
+    }
+
+    for (uint8_t i = 0; i < 3; ++i) {
+      const int16_t raw_value = static_cast<int16_t>(
+          raw[2 * i] | (raw[2 * i + 1] << 8));
+
+      data[i] = kGyroSens[config_.gyro_range] * raw_value;
+    }
+
+    arm_mat_vec_mult_f32(&rot_mat_, data, gyro_data);
+  }
+
+  // 温度：只有传入有效指针时才读取。
+  if (temperature != nullptr) {
+    uint8_t raw[2] = {0};
+
+    tick::DelayUs(kCommWaitTimeUs);
+
+    if (!read_acc(BMI088_ACC_TEMP_MSB, 2, raw)) {
+      return false;
+    }
+
+    int16_t value = static_cast<int16_t>(
+        (raw[0] << 3) | (raw[1] >> 5));
+
+    if (value > 1023) {
+      value -= 2048;
+    }
+
+    *temperature = value * kTempSens + kTempOffset;
+  }
+
+  return true;
+}
+
 BMI088ErrState BMI088::accInit(bool self_test) const
 {
   tick::DelayUs(kCommWaitTimeUs);
@@ -492,7 +629,8 @@ void BMI088::gyroWrite(uint8_t mem_addr, uint8_t value) const
 
 uint8_t BMI088::gyroRead(uint8_t mem_addr) const
 {
-  uint8_t rx_data[2], tx_data[2] = {mem_addr |= kReadSign, kPaddingValue};
+  uint8_t rx_data[2] = {0};
+  uint8_t tx_data[2] = {mem_addr |= kReadSign, kPaddingValue};
   gyroCsL();
   HAL_SPI_TransmitReceive(hspi_, tx_data, rx_data, 2, kSpiTimeout);
   gyroCsH();
@@ -520,7 +658,8 @@ void BMI088::accWrite(uint8_t mem_addr, uint8_t value) const
 
 uint8_t BMI088::accRead(uint8_t mem_addr) const
 {
-  uint8_t rx_data[3], tx_data[3] = {
+  uint8_t rx_data[3] = {0};
+  uint8_t tx_data[3] = {
                           mem_addr |= kReadSign, kPaddingValue, kPaddingValue};
   accCsL();
   HAL_SPI_TransmitReceive(hspi_, tx_data, rx_data, 3, kSpiTimeout);

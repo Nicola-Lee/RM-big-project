@@ -80,6 +80,10 @@ class Mahony : public Ahrs
   virtual void update(
       const float acc_data[3], const float gyro_data[3]) override;
 
+  // dt_s：本次采样与上次采样的实际时间间隔，单位秒。
+  void update(const float acc_data[3],
+              const float gyro_data[3],
+              float dt_s);
   /* 配置方法 */
 
   /**

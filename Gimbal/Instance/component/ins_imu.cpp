@@ -1,3 +1,11 @@
+/*
+ * @Author: Nicola Lee nlee15428@gmail.com
+ * @Date: 2026-09-19 15:52:24
+ * @LastEditors: Nicola Lee nlee15428@gmail.com
+ * @LastEditTime: 2026-10-26 19:32:05
+ * @FilePath: \omni_skeleton\Gimbal\Instance\component\ins_imu.cpp
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ */
 /**
  *******************************************************************************
  * @file      :ins_imu.cpp
@@ -14,6 +22,8 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "ins_imu.hpp"
+#include "imu.hpp"
+
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
 /* Private types -------------------------------------------------------------*/

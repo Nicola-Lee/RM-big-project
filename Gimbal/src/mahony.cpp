@@ -22,6 +22,8 @@
 #include "arm_math.h"
 #include "assert.hpp"
 
+#include <cmath>
+
 namespace hello_world
 {
 namespace ahrs
@@ -69,45 +71,95 @@ Mahony::Mahony(const float quat_init[4], float samp_freq, float kp, float ki)
 #pragma endregion
 }
 
-void Mahony::update(const float acc_data[3], const float gyro_data[3])
+// 两参数版本：保留原来的调用方式。
+void Mahony::update(const float acc_data[3],
+                    const float gyro_data[3])
 {
-  /* 变量检查 */
-#pragma region
+  // 根据配置的采样频率计算时间间隔，
+  // 再调用下面的三参数版本。
+  update(acc_data, gyro_data, 1.0f / samp_freq_);
+}
+
+// 三参数版本：使用实际采样时间间隔。
+void Mahony::update(const float acc_data[3],
+                    const float gyro_data[3],
+                    float dt_s)
+{
+  if (!std::isfinite(dt_s) || dt_s <= 0.0f) {
+    return;
+  }
+
   HW_ASSERT(acc_data != nullptr, "acc_data is empty ptr");
   HW_ASSERT(gyro_data != nullptr, "gyro_data is empty ptr");
-#pragma endregion
 
-  float norm_scale = 0, err_2[3] = {0, 0, 0};
-  if (!(acc_data[0] == 0 && acc_data[1] == 0 && acc_data[2] == 0)) {
-    float v_bar[3], v_hat_2[3];
-    norm_scale = invSqrt(acc_data[0] * acc_data[0] + acc_data[1] * acc_data[1] +
-                         acc_data[2] * acc_data[2]);
+  float norm_scale = 0.0f;
+  float err_2[3] = {0.0f, 0.0f, 0.0f};
+
+  // 加速度不全为零时，利用重力方向修正姿态。
+  if (!(acc_data[0] == 0.0f &&
+        acc_data[1] == 0.0f &&
+        acc_data[2] == 0.0f)) {
+    float v_bar[3];
+    float v_hat_2[3];
+
+    norm_scale = invSqrt(
+        acc_data[0] * acc_data[0] +
+        acc_data[1] * acc_data[1] +
+        acc_data[2] * acc_data[2]);
+
     arm_scale_f32(acc_data, norm_scale, v_bar, 3);
 
-    v_hat_2[0] = quat_[1] * quat_[3] - quat_[0] * quat_[2];
-    v_hat_2[1] = quat_[2] * quat_[3] + quat_[0] * quat_[1];
-    v_hat_2[2] = 0.5f - quat_[1] * quat_[1] - quat_[2] * quat_[2];
+    v_hat_2[0] =
+        quat_[1] * quat_[3] - quat_[0] * quat_[2];
+
+    v_hat_2[1] =
+        quat_[2] * quat_[3] + quat_[0] * quat_[1];
+
+    v_hat_2[2] =
+        0.5f - quat_[1] * quat_[1] - quat_[2] * quat_[2];
 
     cross(v_bar, v_hat_2, err_2);
   }
 
-  float w_x_dt_2[3] = {0}, gyro_err = 0;
-  for (uint8_t i = 0; i < 3; i++) {
-    i_out_[i] += dbl_ki_ * err_2[i] / samp_freq_;
+  float w_x_dt_2[3] = {0.0f, 0.0f, 0.0f};
+  float gyro_err = 0.0f;
+
+  for (uint8_t i = 0; i < 3; ++i) {
+    // 原来除以采样频率，现在乘实际时间间隔。
+    i_out_[i] += dbl_ki_ * err_2[i] * dt_s;
+
     gyro_err = dbl_kp_ * err_2[i] + i_out_[i];
-    w_x_dt_2[i] = (gyro_data[i] + gyro_err) * 0.5f / samp_freq_;
+
+    w_x_dt_2[i] =
+        (gyro_data[i] + gyro_err) * 0.5f * dt_s;
   }
 
-  /* 更新四元数 */
-  float delta_quat[4] = {0},
-        w_x_dt_2_ex[4] = {0, w_x_dt_2[0], w_x_dt_2[1], w_x_dt_2[2]};
-  arm_quaternion_product_single_f32(quat_, w_x_dt_2_ex, delta_quat);
+  // 更新四元数。
+  float delta_quat[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+  float w_x_dt_2_ex[4] = {
+      0.0f,
+      w_x_dt_2[0],
+      w_x_dt_2[1],
+      w_x_dt_2[2]
+  };
+
+  arm_quaternion_product_single_f32(
+      quat_,
+      w_x_dt_2_ex,
+      delta_quat);
+
   float quat[4];
+
   arm_add_f32(quat_, delta_quat, quat, 4);
 
-  /* 归一化四元数 */
-  norm_scale = invSqrt(quat[0] * quat[0] + quat[1] * quat[1] +
-                       quat[2] * quat[2] + quat[3] * quat[3]);
+  // 归一化四元数。
+  norm_scale = invSqrt(
+      quat[0] * quat[0] +
+      quat[1] * quat[1] +
+      quat[2] * quat[2] +
+      quat[3] * quat[3]);
+
   arm_scale_f32(quat, norm_scale, quat_, 4);
 }
 

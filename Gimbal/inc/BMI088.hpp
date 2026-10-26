@@ -186,6 +186,10 @@ class BMI088 : public MemMgr
    */
   void getData(float acc_data[3], float gyro_data[3], float* temp) const;
 
+  bool getDataChecked(float acc_data[3],
+                    float gyro_data[3],
+                    float *temperature) const;
+                    
  private:
   /* 功能性方法 */
 

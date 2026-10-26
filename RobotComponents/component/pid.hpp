@@ -28,9 +28,11 @@ class Pid {
 
   // 计算误差
   // dt_s单位为秒
-  float calculate(float target, float feedback, float dt_s);
+  float calculate(float target, float feedback, float dt_s,
+                float feedforward = 0.0f);
 
-  float calculateError(float error, float dt_s);
+  float calculateError(float error, float dt_s,
+                      float feedforward = 0.0f);
 
   // 清除
   void reset();
