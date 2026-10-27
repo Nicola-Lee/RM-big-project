@@ -21,14 +21,10 @@
 /* Exported macro ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
 /* Exported types ------------------------------------------------------------*/
-namespace hello_world {
-namespace chassis_ik_solver {
-class ChassisIkSolver;
-}  // namespace chassis_ik_solver
-}  // namespace hello_world
+namespace robot { class Chassis; }
 /* Exported variables --------------------------------------------------------*/
 /* Exported function prototypes ----------------------------------------------*/
-/* 获取底盘逆解器单例（底盘速度 → 各轮速 / 舵角的运动学解算）。 */
-hello_world::chassis_ik_solver::ChassisIkSolver *GetChassisIkSolver();
+// 兼容原骨架入口：逆解已合并进 robot::Chassis，返回与 GetChassis() 相同的对象。
+robot::Chassis *GetChassisIkSolver();
 
 #endif /* CHASSIS_INSTANCE_INS_CHASSIS_IKSOLVER_HPP_ */

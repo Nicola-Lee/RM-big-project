@@ -17,6 +17,7 @@
 #include "comm_task.hpp"
 #include "tim.h"
 #include "ins_pid.hpp"
+#include "ins_robot.hpp"
 
 /* Exported function definitions ---------------------------------------------*/
 void MainTaskInit(void) {
@@ -31,10 +32,19 @@ void MainTaskInit(void) {
   GetPidMotorYaw();
   GetPidMotorPitch();
 
+  // 在启动通信和周期控制前创建云台、电机与两个 PID 单例；此处不使能电机。
+  if (GetGimbal() == nullptr) {
+    Error_Handler();
+    return;
+  }
   CommTaskInit();
 }
 
 void MainTask(void) {
+  // 第7项已提供 Gimbal::update(input)，由后续 Robot 在每个控制周期调用。
+  // 恢复阶段先以零转矩安排电机使能并等待反馈，Working 才允许位置闭环。
+  // input 的有效性必须来自在线/超时检查；切回非工作态应调用 stop()。
+  // 当前 CommTask 保留零转矩和失能，正式输出待状态机接入后统一切换。
   /* TODO【新人任务】:
    * 1ms 控制周期入口：调用 robot->update()，由状态机完成
    * 「读数据 → 迁移 → 生成指令 → 下发」的整条链路。

@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include <cstdint>
 
+#include "module_state.hpp"
 #include "tick.hpp"
 
 /* Exported macro ------------------------------------------------------------*/

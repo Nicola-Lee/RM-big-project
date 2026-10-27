@@ -14,6 +14,9 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "ins_robot.hpp"
+#include "chassis.hpp"
+#include "ins_motor.hpp"
+#include "ins_pid.hpp"
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
 /* Private types -------------------------------------------------------------*/
@@ -37,11 +40,25 @@ robot::Robot *GetRobot() {
 }
 
 robot::Chassis *GetChassis() {
-  /* TODO【新人任务】:
-   * 返回 Chassis 模块 robot::Chassis 单例，做法同 GetRobot()。
-   * robot::Chassis 类定义由你在 RobotModules/component/chassis.hpp 补全。
-   */
-  return nullptr;
+  static robot::Chassis chassis;
+  static const bool initialized = []() {
+    robot::ChassisParams params;
+    // 实车 X 型麦轮尺寸；轮速上限需调试后填写，0 表示尚未配置。
+    params.wheel_radius_m = 0.07786f;
+    params.half_length_m = 0.15338f;
+    params.half_width_m = 0.15338f;
+    params.max_wheel_speed_rad_s = 0.0f;
+    // ID1、ID2、ID3、ID4 各自的 kV，单位 raw/(rad/s)。先保持关闭。
+    params.velocity_feedforward_gain = {0.0f, 0.0f, 0.0f, 0.0f};
+    robot::Chassis::Motors motors{};
+    robot::Chassis::Pids pids{};
+    for (int i = 0; i < 4; ++i) {
+      motors[i] = GetMotorWheel(i);
+      pids[i] = GetPidMotorWheel(i);
+    }
+    return chassis.init(params, motors, pids);
+  }();
+  return initialized ? &chassis : nullptr;
 }
 
 /* Private function definitions ----------------------------------------------*/
