@@ -36,6 +36,8 @@ struct BoardGimbalData {
   bool imu_ready = false;
   bool local_ready = false;
   bool emergency_stop = true;
+  bool remote_online = false;
+  bool operator_armed = false;  // 操作手允许恢复，不等于电机运动许可
   GimbalMotion feedback{};  // 已标定电机关节角，rad；不是IMU绝对姿态
   bool yaw_feedback_valid = false;
   bool pitch_feedback_valid = false;
@@ -52,7 +54,7 @@ namespace board_protocol {
 inline constexpr uint32_t kChassisStatusId = 0x210;
 inline constexpr uint32_t kGimbalStatusId = 0x211;
 inline constexpr uint32_t kVelocityId = 0x212;
-inline constexpr uint8_t kVersion = 1;
+inline constexpr uint8_t kVersion = 2;
 inline constexpr uint32_t kTimeoutMs = 100;
 inline constexpr uint32_t kPublishTimeoutMs = 20;
 inline constexpr float kPi = 3.14159265358979323846f;
@@ -99,7 +101,7 @@ constexpr bool Valid(const BoardChassisData &d) {
                           AngleValid(d.gimbal_target.yaw)&&AngleValid(d.gimbal_target.pitch)));
 }
 constexpr bool Valid(const BoardGimbalData &d) {
-  return IsValid(d.life)&&IsValid(d.mode)&&
+  return IsValid(d.life)&&IsValid(d.mode)&&(!d.operator_armed||d.remote_online)&&
       (!d.yaw_feedback_valid||AngleValid(d.feedback.yaw))&&
       (!d.pitch_feedback_valid||AngleValid(d.feedback.pitch));
 }
@@ -134,7 +136,7 @@ constexpr bool Pack(const BoardChassisData &d,uint8_t seq,uint8_t out[8]) {
   if(d.target_valid){Put16(out+2,Quantize(d.gimbal_target.yaw,kAngleScale));Put16(out+4,Quantize(d.gimbal_target.pitch,kAngleScale));}
   out[6]=static_cast<uint8_t>(d.requested_gimbal_mode)|(d.target_valid?2:0);out[7]=kVersion;return true;
 }
-// 0x211: flags,seq,yawBE16,pitchBE16,reserved0,version。
+// 0x211: flags,seq,yawBE16,pitchBE16,operatorFlags,version。
 constexpr bool Pack(const BoardGimbalData &d,uint8_t seq,uint8_t out[8]) {
   Clear(out);if(!Valid(d))return false;
   out[0]=static_cast<uint8_t>(d.life)|(static_cast<uint8_t>(d.mode)<<2)|
@@ -143,6 +145,7 @@ constexpr bool Pack(const BoardGimbalData &d,uint8_t seq,uint8_t out[8]) {
   out[1]=seq;
   if(d.yaw_feedback_valid)Put16(out+2,Quantize(d.feedback.yaw,kAngleScale));
   if(d.pitch_feedback_valid)Put16(out+4,Quantize(d.feedback.pitch,kAngleScale));
+  out[6]=(d.remote_online?1:0)|(d.operator_armed?2:0);
   out[7]=kVersion;return true;
 }
 // 0x212: vxBE16,vyBE16,wBE16,seq,flags；flags高3位为版本。
@@ -174,10 +177,11 @@ constexpr bool Unpack(const uint8_t in[8],BoardChassisData &out,uint8_t &seq) {
   out=d;seq=in[1];return true;
 }
 constexpr bool Unpack(const uint8_t in[8],BoardGimbalData &out,uint8_t &seq) {
-  if(in[7]!=kVersion||in[6]!=0)return false;
+  if(in[7]!=kVersion||(in[6]&0xFC))return false;
   BoardGimbalData d{};d.life=static_cast<LifeState>(in[0]&3);d.mode=static_cast<GimbalMode>((in[0]>>2)&1);
   d.imu_ready=in[0]&8;d.local_ready=in[0]&0x10;d.yaw_feedback_valid=in[0]&0x20;
   d.pitch_feedback_valid=in[0]&0x40;d.emergency_stop=in[0]&0x80;
+  d.remote_online=in[6]&1;d.operator_armed=in[6]&2;
   const int32_t y=Get16(in+2),p=Get16(in+4);
   if(!RawAngleValid(y)||!RawAngleValid(p)||(!d.yaw_feedback_valid&&y!=0)||(!d.pitch_feedback_valid&&p!=0))return false;
   d.feedback={DecodeYaw(y),DecodePitch(p)};

@@ -18,6 +18,7 @@
 #include "tim.h"
 #include "ins_pid.hpp"
 #include "ins_robot.hpp"
+#include "robot.hpp"
 #include "ins_imu.hpp"
 #include "imu.hpp"
 #include <cstdint>
@@ -166,6 +167,10 @@ void MainTaskInit(void) {
     Error_Handler();
     return;
   }
+  if(GetRobot()==nullptr){
+    Error_Handler();
+    return;
+  }
   CommTaskInit();
   imu_poll_initialized = true;
   imu_poll_status = imu_instance->state() == hello_world::imu::ImuState::Uninitialized
@@ -175,15 +180,9 @@ void MainTaskInit(void) {
 }
 
 void MainTask(void) {
-  // 第7项已提供 Gimbal::update(input)，由后续 Robot 在每个控制周期调用。
-  // 恢复阶段先以零转矩安排电机使能并等待反馈，Working 才允许位置闭环。
-  // input 的有效性必须来自在线/超时检查；切回非工作态应调用 stop()。
-  // 当前 CommTask 保留零转矩和失能，正式输出待状态机接入后统一切换。
-  /* TODO【新人任务】:
-   * 1ms 控制周期入口：调用 robot->update()，由状态机完成
-   * 「读数据 → 迁移 → 生成指令 → 下发」的整条链路。
-   * 保持薄薄一层，不要在这里堆业务逻辑。
-   */
+  // 原TIM6的1ms入口。IMU阻塞采样继续在主循环，控制只读取快照。
+  auto *controller=GetRobot();
+  if(controller!=nullptr)controller->update(0.001f);
 }
 
 /* Private function definitions ----------------------------------------------*/

@@ -67,6 +67,8 @@ struct GimbalMotorFeedbackSnapshot {
   robot::GimbalMotion angle{};
   bool yaw_valid=false;
   bool pitch_valid=false;
+  bool yaw_fault=false;
+  bool pitch_fault=false;
   uint32_t yaw_last_rx_ms=0;
   uint32_t pitch_last_rx_ms=0;
 };

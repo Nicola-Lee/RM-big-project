@@ -582,6 +582,12 @@ bool Imu::update(float dt_s)
   next.roll = euler[0];
   next.pitch = euler[1];
   next.yaw = euler[2];
+  // q为机体系到重力参考系的旋转；取机体X轴在水平面的投影。
+  const float heading_x = 1.0f - 2.0f * (q[2]*q[2] + q[3]*q[3]);
+  const float heading_y = 2.0f * (q[1]*q[2] + q[0]*q[3]);
+  const float heading_norm_sq = heading_x*heading_x + heading_y*heading_y;
+  next.heading_valid = std::isfinite(heading_norm_sq) && heading_norm_sq > 0.000001f;
+  next.heading_yaw = next.heading_valid ? std::atan2(heading_y,heading_x) : 0.0f;
 
   for (int i = 0; i < 3; ++i) {
     next.gyro[i] = gyro_corrected[i];
@@ -649,6 +655,8 @@ bool Imu::getSnapshot(ImuSnapshot &result) const
     result.roll = 0.0f;
     result.pitch = 0.0f;
     result.yaw = 0.0f;
+    result.heading_yaw = 0.0f;
+    result.heading_valid = false;
 
     for (int i = 0; i < 3; ++i) {
       result.gyro[i] = 0.0f;

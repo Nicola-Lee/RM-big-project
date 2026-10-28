@@ -78,6 +78,11 @@ class Gimbal {
   // 清零转矩和控制历史；电机 enable/disable 由 Robot/通信层统一安排。
   void stop();
   bool configured() const { return configured_; }
+  bool controlReady() const;
+  float pitchMin() const { return params_.pitch_min_rad; }
+  float pitchMax() const { return params_.pitch_max_rad; }
+  float yawTargetRateLimit() const { return params_.yaw_target_rate_rad_s; }
+  float pitchTargetRateLimit() const { return params_.pitch_target_rate_rad_s; }
   const GimbalResult &result() const { return result_; }
 
   static bool NormalizeYaw(float angle, float &normalized);

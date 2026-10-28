@@ -76,6 +76,10 @@ struct ImuSnapshot {
   float roll = 0.0f;
   float pitch = 0.0f;
   float yaw = 0.0f;
+  // 重力参考系中的机体X轴水平朝向，rad；不受reference_quat姿态归零影响。
+  // X轴接近竖直时水平朝向无定义，heading_valid为false。
+  float heading_yaw = 0.0f;
+  bool heading_valid = false;
 
   float gyro[3] = {0.0f, 0.0f, 0.0f};
 

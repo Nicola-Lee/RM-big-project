@@ -75,7 +75,11 @@ bool GimbalChassisComm::decode(uint32_t id,const uint8_t in[8],uint8_t length){
     const bool accepted=peer_tracker_.accept(seq,now);
     // 即使是重复/逆序帧，停止标志也立即收紧输出；正常帧不能借此刷新时间。
     if(!accepted){
-      if(code_part_==CodePart::Chassis&&g.emergency_stop)rx_gimbal_.emergency_stop=true;
+      if(code_part_==CodePart::Chassis){
+        if(g.emergency_stop)rx_gimbal_.emergency_stop=true;
+        if(!g.remote_online)rx_gimbal_.remote_online=false;
+        if(!g.operator_armed)rx_gimbal_.operator_armed=false;
+      }
       if(code_part_==CodePart::Gimbal&&c.emergency_stop)rx_chassis_.emergency_stop=true;
       return false;
     }

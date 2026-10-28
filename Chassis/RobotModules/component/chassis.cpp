@@ -19,6 +19,12 @@
 #include "pid.hpp"
 
 namespace robot {
+bool Chassis::controlReady() const {
+  if(!configured_ || params_.max_wheel_speed_rad_s<=0.0f)return false;
+  for(auto *pid:pids_)if(pid==nullptr||!pid->controlReady())return false;
+  return true;
+}
+
 bool Chassis::ToChassisFrame(const ChassisCommand &command,
                              float relative_yaw_rad,
                              ChassisFrameVelocity &body) {

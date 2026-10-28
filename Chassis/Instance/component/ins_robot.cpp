@@ -14,6 +14,9 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "ins_robot.hpp"
+#include "robot.hpp"
+#include "ins_imu.hpp"
+#include "ins_chassis_gimbal_comm.hpp"
 #include "chassis.hpp"
 #include "ins_motor.hpp"
 #include "ins_pid.hpp"
@@ -25,18 +28,19 @@
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
 robot::Robot *GetRobot() {
-  /* TODO【新人任务】:
-   * 返回本板顶层状态机 robot::Robot 单例。
-   *
-   * 你要做：
-   *   1. 在本文件静态定义一个 robot::Robot 对象（静态存储期，程序启动即构造）。
-   *   2. 返回它的地址。
-   *
-   * 约束 / 提示：
-   *   - robot::Robot 类的定义由你在 RobotModules/component/robot.hpp 补全（见该文件 TODO），
-   *     本文件只负责实例化并返回地址。
-   */
-  return nullptr;
+  static robot::Robot controller;
+  static const bool initialized=[](){
+    robot::ChassisRobotParams params;
+    // 待实机配置：分量速度m/s、角速度rad/s、加速度m/s^2和rad/s^2。
+    params.max_axis_speed_m_s=0.0f;
+    params.max_body_rate_rad_s=0.0f;
+    params.linear_accel_m_s2=0.0f;
+    params.angular_accel_rad_s2=0.0f;
+    // 跟随PID独立整定，输出为底盘角速度rad/s；四轮PID仍在ins_pid.cpp。
+    params.follow_pid={.kp=0.0f,.ki=0.0f,.kd=0.0f,.integral_limit=0.0f,.output_limit=0.0f};
+    return controller.init(params,GetChassis(),GetImu(),GetGimbalChassisComm());
+  }();
+  return initialized?&controller:nullptr;
 }
 
 robot::Chassis *GetChassis() {

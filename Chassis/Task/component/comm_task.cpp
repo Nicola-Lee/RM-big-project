@@ -30,6 +30,10 @@
 #include "gimbal_chassis_comm.hpp"
 #include "ins_imu.hpp"
 #include "imu.hpp"
+#include "tick.hpp"
+#include "ins_robot.hpp"
+#include "robot.hpp"
+#include <cmath>
 /* Exported function definitions ---------------------------------------------*/
 static volatile bool comm_initialized = false;
 
@@ -45,6 +49,25 @@ bool TryQueueBoardFrame(uint32_t id, const uint8_t data[8]) {
 }
 }
 
+namespace {
+uint32_t wheel_last_rx_ms[4]{};
+bool wheel_has_feedback[4]{};
+}
+void RecordWheelFeedback(int index) {
+  if(index<0||index>=4)return;
+  wheel_last_rx_ms[index]=hello_world::tick::GetTickMs();wheel_has_feedback[index]=true;
+}
+void GetWheelFeedbackSnapshot(WheelFeedbackSnapshot &out) {
+  const uint32_t saved=__get_PRIMASK();__disable_irq();
+  const uint32_t now=hello_world::tick::GetTickMs();out={};
+  for(int i=0;i<4;++i){
+    auto *motor=GetMotorWheel(i);out.velocity[i]=motor->vel();
+    out.valid[i]=robot::board_protocol::Fresh(wheel_has_feedback[i],now,wheel_last_rx_ms[i])&&
+                 std::isfinite(out.velocity[i]);
+  }
+  __set_PRIMASK(saved);
+}
+
 bool PublishChassisBoardState(const robot::GimbalChassisComm::ChassisData &state) {
   return GetGimbalChassisComm()->setLocalChassis(state);
 }
@@ -56,7 +79,7 @@ void TransmitBoardStatus() {
   state.imu_ready=GetImu()->getSnapshot(imu);
   // local_ready还需由Robot确认电机、配置等；此处只能进一步收紧。
   state.local_ready=state.local_ready&&state.imu_ready;
-  if(!state.local_ready)state.emergency_stop=true;
+  if(state.life==robot::LifeState::Working&&!state.local_ready)state.emergency_stop=true;
   if(state.emergency_stop)state.target_valid=false;
   if(!comm->setLocalChassis(state))return;
   uint8_t data[8]{};
@@ -122,6 +145,9 @@ void CommTask(void) {
   TransmitBoardStatus();  // CAN1状态发送独立于后续CAN2电机发送
   // TODO第10项：统一邮箱忙状态及喂狗策略，当前保留原有喂狗路径。
   uint8_t tx_data[8] = {0};
+  auto *controller=GetRobot();
+  const bool allow_control=controller!=nullptr&&
+      controller->motorAction()==robot::control::MotorAction::Control;
 
   for (int idx = 0; idx < 4; ++idx) {
     auto *motor = GetMotorWheel(idx);
@@ -130,8 +156,8 @@ void CommTask(void) {
       return;
     }
 
-    // 先保持零电流
-    motor->setInput(0.0f);
+    // Robot每周期拥有控制量；没有当期运动许可时清零，不能覆盖正常PID结果。
+    if(!allow_control)motor->setInput(0.0f);
 
     // 写入每台电机的控制信息
     if (!motor->encode(tx_data)) {

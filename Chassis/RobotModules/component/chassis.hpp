@@ -68,6 +68,7 @@ class Chassis {
   void stop();
   const ChassisResult &result() const { return result_; }
   bool configured() const { return configured_; }
+  bool controlReady() const;
   static bool ToChassisFrame(const ChassisCommand &command,
                              float relative_yaw_rad,
                              ChassisFrameVelocity &body);

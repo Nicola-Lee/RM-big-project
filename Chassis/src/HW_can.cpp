@@ -24,6 +24,7 @@
 #include "ins_motor.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
 #include "gimbal_chassis_comm.hpp"
+#include "comm_task.hpp"
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
 static CAN_RxHeaderTypeDef rx_header2;
@@ -140,7 +141,7 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
         uint32_t feedback_id = hello_world::motor::M3508::GetRxId(motor->id());
 
         if (rx_header2.StdId == feedback_id) {
-          motor->decode(can2_rx_data);
+          if(motor->decode(can2_rx_data)) RecordWheelFeedback(idx);
           break;
         }
       }

@@ -12,34 +12,47 @@
  *  All Rights Reserved.
  *******************************************************************************
  */
-/* Define to prevent recursive inclusion -------------------------------------*/
 #ifndef CHASSIS_ROBOT_MODULES_ROBOT_HPP_
 #define CHASSIS_ROBOT_MODULES_ROBOT_HPP_
-
-/* Includes ------------------------------------------------------------------*/
-/* Exported macro ------------------------------------------------------------*/
-/* Exported constants --------------------------------------------------------*/
-/* Exported types ------------------------------------------------------------*/
-/* Exported variables --------------------------------------------------------*/
-/* Exported function prototypes ----------------------------------------------*/
-
-/* ============================================================================
- * 【新人任务】声明底盘板顶层状态机类 Robot（namespace robot）。
- *
- * 你要做：
- *   1. 设计 Robot 类，作为本板每个控制周期（1ms）的入口：汇总各模块数据，
- *      生成控制指令并下发给执行部件。
- *   2. 实现「生命状态」三态切换：Dead（上电未就绪 / 离线）→ Resurrection（恢复
- *      自检）→ Working（正常控制），并定义各状态进入 / 退出时的复位动作。
- *   3. 在 Working 态下按手动控制源与工作模式（分离 / 随动 / 小陀螺）生成底盘运动指令。
- *   4. 提供注册各模块指针的接口（Chassis、Imu、4 轮电机、GimbalChassisComm），并在每个周期按正确顺序更新数据。
- *
- * 约束 / 提示：
- *   - 底盘板与云台板之间只能通过 GimbalChassisComm 的
- *     CAN 帧交换信息，不能直接互相调用函数或共享变量。
- *   - 控制周期入口由 Task/component/main_task.cpp 的定时中断调用，本类自己不要开中断、
- *     不要死等延时。
- *   - 急停：遥控器拨到急停位时，必须保证所有电机指令归零（硬性验收项）。
- *   - 状态机的基类 / 迁移机制要自己设计，本骨架不提供（裁判系统 / 超电 / 蜂鸣器等组件本骨架也没有，可忽略）。
- * ==========================================================================*/
-#endif /* CHASSIS_ROBOT_MODULES_ROBOT_HPP_ */
+#include "chassis.hpp"
+#include "pid.hpp"
+#include "gimbal_chassis_comm.hpp"
+#include "robot_control.hpp"
+namespace hello_world::imu {class Imu;}
+namespace robot {
+struct ChassisRobotParams {
+  float max_axis_speed_m_s=0.0f;
+  float max_body_rate_rad_s=0.0f;
+  float linear_accel_m_s2=0.0f;
+  float angular_accel_rad_s2=0.0f;
+  hello_world::pid::PidParams follow_pid{}; // 输出单位rad/s，独立于四轮速度PID
+  uint32_t ready_stable_ms=100;
+  uint32_t recovery_timeout_ms=30000;
+};
+class Robot {
+ public:
+  bool init(const ChassisRobotParams &params,Chassis *chassis,
+            hello_world::imu::Imu *imu,GimbalChassisComm *comm);
+  void update(float dt_s=0.001f);
+  control::MotorAction motorAction()const;
+  control::Diagnostics diagnostics()const{return diagnostic_;}
+ private:
+  bool paramsReady()const;
+  void resetControl();
+  void publish();
+  ChassisRobotParams params_{};
+  Chassis *chassis_=nullptr;hello_world::imu::Imu *imu_=nullptr;
+  GimbalChassisComm *comm_=nullptr;
+  hello_world::pid::Pid follow_pid_{};
+  control::LifeMachine machine_{};
+  control::Diagnostics diagnostic_{};
+  ChassisCommand last_command_{};
+  ChassisMode last_mode_=ChassisMode::Disabled;
+  control::MotorAction action_=control::MotorAction::Disable;
+  bool initialized_=false,updated_=false,ever_active_=false;
+  uint32_t working_since_=0;
+  float last_follow_error_=0.0f;
+  bool has_follow_error_=false;
+};
+}  // namespace robot
+#endif

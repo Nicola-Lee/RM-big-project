@@ -39,6 +39,11 @@ class Pid {
 
   // 获取上一次计算结果
   float output() const { return output_; }
+  // 只检查可用于正常负反馈的基础配置；稳定性仍需实机整定。
+  bool controlReady() const {
+    return params_.kp > 0.0f && params_.ki >= 0.0f && params_.kd >= 0.0f &&
+           params_.output_limit > 0.0f;
+  }
 
  private:
   PidParams params_{};

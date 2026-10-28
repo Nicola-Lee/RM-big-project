@@ -12,35 +12,49 @@
  *  All Rights Reserved.
  *******************************************************************************
  */
-/* Define to prevent recursive inclusion -------------------------------------*/
 #ifndef GIMBAL_ROBOT_MODULES_ROBOT_HPP_
 #define GIMBAL_ROBOT_MODULES_ROBOT_HPP_
-
-/* Includes ------------------------------------------------------------------*/
-/* Exported macro ------------------------------------------------------------*/
-/* Exported constants --------------------------------------------------------*/
-/* Exported types ------------------------------------------------------------*/
-/* Exported variables --------------------------------------------------------*/
-/* Exported function prototypes ----------------------------------------------*/
-
-/* ============================================================================
- * 【新人任务】声明云台板顶层状态机类 Robot（namespace robot）。
- *
- * 你要做：
- *   1. 设计 Robot 类，作为本板每个控制周期的入口：汇总云台目标角度（来自遥控器 /
- *      键鼠 / 底盘经双板通讯传来的期望值）、IMU 姿态、电机反馈，生成 yaw / pitch
- *      控制指令。
- *   2. 实现「生命状态」三态切换：Dead → Resurrection → Working，并定义各状态
- *      进入 / 退出时的复位动作。
- *   3. 提供注册各模块指针的接口（Gimbal、Imu、yaw / pitch 电机、GimbalChassisComm），
- *      并在每个周期按正确顺序更新数据。
- *
- * 约束 / 提示：
- *   - 与底盘板之间只能通过 GimbalChassisComm 的
- *     CAN 帧交换信息，不能直接互相调用函数或共享变量。
- *   - 控制周期入口由 Task/component/main_task.cpp 的定时中断调用，本类自己不要开中断、
- *     不要死等延时。
- *   - 急停：遥控器拨到急停位时，必须保证所有电机指令归零（硬性验收项）。
- *   - 状态机的基类 / 迁移机制要自己设计，本骨架不提供（裁判系统 / 超电 / 蜂鸣器等组件本骨架也没有，可忽略）。
- * ==========================================================================*/
-#endif /* GIMBAL_ROBOT_MODULES_ROBOT_HPP_ */
+#include "gimbal.hpp"
+#include "gimbal_chassis_comm.hpp"
+#include "robot_control.hpp"
+namespace hello_world::imu {class Imu;}
+namespace hello_world::motor {class DaMiao;}
+namespace robot {
+struct GimbalRobotParams {
+  bool switch_mapping_confirmed=false;
+  float deadband=0.03f;
+  float forward_sign=1.0f,left_sign=-1.0f,yaw_sign=-1.0f,pitch_sign=-1.0f,wheel_sign=1.0f;
+  float max_forward_m_s=0.0f,max_left_m_s=0.0f;
+  float max_manual_body_rate_rad_s=0.0f,max_spin_rate_rad_s=0.0f;
+  float max_yaw_input_rate_rad_s=0.0f,max_pitch_input_rate_rad_s=0.0f;
+  bool require_neutral_on_recovery=true;
+  float neutral_threshold=0.05f;
+  uint32_t neutral_stable_ms=100,ready_stable_ms=100,recovery_timeout_ms=30000;
+};
+class Robot {
+ public:
+  bool init(const GimbalRobotParams &params,Gimbal *gimbal,hello_world::imu::Imu *imu,
+            GimbalChassisComm *comm,hello_world::motor::DaMiao *yaw,
+            hello_world::motor::DaMiao *pitch);
+  void update(float dt_s=0.001f);
+  control::MotorAction motorAction()const;
+  control::Diagnostics diagnostics()const{return diagnostic_;}
+ private:
+  bool paramsReady()const;
+  void resetControl();
+  void publish(bool remote_online,bool operator_armed,ChassisMode mode);
+  GimbalRobotParams params_{};
+  Gimbal *gimbal_=nullptr;hello_world::imu::Imu *imu_=nullptr;
+  GimbalChassisComm *comm_=nullptr;
+  hello_world::motor::DaMiao *yaw_=nullptr,*pitch_=nullptr;
+  control::LifeMachine machine_{};
+  control::NeutralLatch neutral_{};
+  control::Diagnostics diagnostic_{};
+  control::MotorAction action_=control::MotorAction::Disable;
+  float heading_target_=0.0f,pitch_target_=0.0f;
+  bool initialized_=false,updated_=false,target_initialized_=false;
+  uint32_t last_enable_request_ms_=0;
+  bool enable_requested_=false;
+};
+}  // namespace robot
+#endif

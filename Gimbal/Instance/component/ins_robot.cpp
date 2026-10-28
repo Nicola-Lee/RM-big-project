@@ -14,6 +14,9 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "ins_robot.hpp"
+#include "robot.hpp"
+#include "ins_imu.hpp"
+#include "ins_chassis_gimbal_comm.hpp"
 #include "gimbal.hpp"
 #include "ins_motor.hpp"
 #include "ins_pid.hpp"
@@ -25,18 +28,26 @@
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
 robot::Robot *GetRobot() {
-  /* TODO【新人任务】:
-   * 返回本板顶层状态机 robot::Robot 单例。
-   *
-   * 你要做：
-   *   1. 在本文件静态定义一个 robot::Robot 对象（静态存储期，程序启动即构造）。
-   *   2. 返回它的地址。
-   *
-   * 约束 / 提示：
-   *   - robot::Robot 类的定义由你在 RobotModules/component/robot.hpp 补全（见该文件 TODO），
-   *     本文件只负责实例化并返回地址。
-   */
-  return nullptr;
+  static robot::Robot controller;
+  static const bool initialized=[](){
+    robot::GimbalRobotParams params;
+    // 已由用户确认：左拨杆上/中/下=分离/跟随/小陀螺；右下急停，中/上允许恢复。
+    params.switch_mapping_confirmed=true;
+    params.deadband=0.03f;
+    // 正方向：前进/左移/左转/下俯/底盘逆时针；实际遥控方向仍需上板核对。
+    params.forward_sign=1.0f;params.left_sign=-1.0f;
+    params.yaw_sign=-1.0f;params.pitch_sign=-1.0f;params.wheel_sign=1.0f;
+    // 待实机配置；零值表示尚未配置，状态机禁止进入正常控制。
+    params.max_forward_m_s=0.0f;params.max_left_m_s=0.0f;
+    params.max_manual_body_rate_rad_s=0.0f;params.max_spin_rate_rad_s=0.0f;
+    params.max_yaw_input_rate_rad_s=0.0f;params.max_pitch_input_rate_rad_s=0.0f;
+    // 恢复时先回中100ms，再进行双方就绪握手，防止恢复即追赶旧摇杆请求。
+    params.require_neutral_on_recovery=true;
+    auto *yaw=static_cast<hello_world::motor::DM_J4310 *>(GetMotorYaw());
+    auto *pitch=static_cast<hello_world::motor::DM_J4310 *>(GetMotorPitch());
+    return controller.init(params,GetGimbal(),GetImu(),GetGimbalChassisComm(),yaw,pitch);
+  }();
+  return initialized?&controller:nullptr;
 }
 
 robot::Gimbal *GetGimbal() {

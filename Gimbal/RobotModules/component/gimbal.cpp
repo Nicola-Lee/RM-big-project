@@ -18,6 +18,11 @@
 #include "pid.hpp"
 
 namespace robot {
+bool Gimbal::controlReady() const {
+  return configured_ && ControlParamsReady(params_) && yaw_pid_!=nullptr &&
+         pitch_pid_!=nullptr && yaw_pid_->controlReady() && pitch_pid_->controlReady();
+}
+
 bool Gimbal::NormalizeYaw(float angle, float &normalized) {
   normalized = 0.0f;
   if (!IsFinite(angle)) return false;

@@ -22,6 +22,8 @@
 #include "gimbal_chassis_comm.hpp"
 #include "ins_imu.hpp"
 #include "imu.hpp"
+#include "ins_robot.hpp"
+#include "robot.hpp"
 #include <cstdint>
 #include "ins_comm.hpp"
 #include "usart.h"
@@ -199,6 +201,10 @@ void GetGimbalMotorFeedbackSnapshot(GimbalMotorFeedbackSnapshot &out) {
   auto *pitch=static_cast<hello_world::motor::DM_J4310 *>(GetMotorPitch());
   out={};out.yaw_last_rx_ms=joint_last_rx_ms[0];out.pitch_last_rx_ms=joint_last_rx_ms[1];
   using Dm=hello_world::motor::DaMiao;
+  out.yaw_fault=robot::board_protocol::Fresh(joint_has_feedback[0],now,joint_last_rx_ms[0])&&
+      static_cast<uint8_t>(yaw->status_code())>=8;
+  out.pitch_fault=robot::board_protocol::Fresh(joint_has_feedback[1],now,joint_last_rx_ms[1])&&
+      static_cast<uint8_t>(pitch->status_code())>=8;
   out.yaw_valid=robot::board_protocol::Fresh(joint_has_feedback[0],now,joint_last_rx_ms[0])&&
       yaw->is_enabled()&&yaw->status_code()==Dm::StatusCode::kMotorEnabled;
   out.pitch_valid=robot::board_protocol::Fresh(joint_has_feedback[1],now,joint_last_rx_ms[1])&&
@@ -220,8 +226,11 @@ bool PublishChassisVelocity(const robot::ChassisCommand &command,
   const bool online=GetRemoteControlSnapshot(remote);
   robot::GimbalChassisComm::VelocityData data{};
   data.command=command;data.mode=mode;data.remote_online=online;
-  data.emergency_stop=!control_enabled||!online;
-  data.valid=control_enabled&&online&&mode!=robot::ChassisMode::Disabled;
+  // 发布时再次核对本地拨杆，避免CAN接收中断更新急停后仍带出旧许可。
+  const bool armed=online&&robot::control::OperatorArmed(remote.rc_r_switch);
+  const bool mode_matches=robot::control::ModeFromSwitch(remote.rc_l_switch)==mode;
+  data.emergency_stop=!control_enabled||!armed||!mode_matches;
+  data.valid=control_enabled&&armed&&mode_matches&&mode!=robot::ChassisMode::Disabled;
   auto *comm=GetGimbalChassisComm();
   if(!robot::board_protocol::Valid(data)) {
     // 非法发布立即覆盖旧速度，不能继续发送上一个有效命令。
@@ -240,7 +249,12 @@ void TransmitBoardStatusAndVelocity() {
   state.feedback=joint.angle;state.yaw_feedback_valid=joint.yaw_valid;
   state.pitch_feedback_valid=joint.pitch_valid;
   state.local_ready=state.local_ready&&state.imu_ready&&joint.yaw_valid&&joint.pitch_valid;
-  state.emergency_stop=state.emergency_stop||!remote_online||!state.local_ready;
+  state.remote_online=remote_online;
+  state.operator_armed=state.operator_armed&&remote_online&&
+      robot::control::OperatorArmed(remote.rc_r_switch)&&
+      robot::control::ModeFromSwitch(remote.rc_l_switch)!=robot::ChassisMode::Disabled;
+  state.emergency_stop=state.emergency_stop||!state.operator_armed||
+      (state.life==robot::LifeState::Working&&!state.local_ready);
   if(!comm->setLocalGimbal(state))return;
   uint8_t data[8]{};
   if(HAL_CAN_GetTxMailboxesFreeLevel(&hcan1)>0&&comm->encode(data)&&
@@ -338,11 +352,13 @@ void CommTask(void) {
   if (yaw == nullptr || pitch == nullptr) {
     return;
   }
+  // Robot在恢复状态排队使能命令；未获正常控制许可时两轴统一清零。
+  auto *controller=GetRobot();
+  const auto action=controller==nullptr?robot::control::MotorAction::Disable:controller->motorAction();
+  if(action!=robot::control::MotorAction::Control){yaw->setInput(0.0f);pitch->setInput(0.0f);}
+  if(action==robot::control::MotorAction::Disable){yaw->disable();pitch->disable();}
   // 先检查空闲再编码
   if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) > 0) {
-    yaw->setInput(0.0f);//目前先出零
-    yaw->disable();
-
     uint8_t data[8] = {0};
     if (yaw->encode(data)) {
       CAN_Send_Msg(&hcan1, data, yaw->tx_id(), 8);
@@ -350,9 +366,6 @@ void CommTask(void) {
   }
 
   if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan2) > 0) {
-    pitch->setInput(0.0f);
-    pitch->disable();
-
     uint8_t data[8] = {0};
     if (pitch->encode(data)) {
       CAN_Send_Msg(&hcan2, data, pitch->tx_id(), 8);
