@@ -36,6 +36,7 @@ void RemoteControlRxPoll(void);
 } 
 
 #include <cstdint>
+#include "gimbal_chassis_comm.hpp"
 
 //一次读取到的遥控器数据
 struct RemoteControlSnapshot {
@@ -57,6 +58,21 @@ struct RemoteControlSnapshot {
 
 //返回true表示在线 false表示当前数据不能用于控制
 bool GetRemoteControlSnapshot(RemoteControlSnapshot &snapshot);
+
+// 第9项Robot本地计算云台目标角；这里仅发布底盘速度和云台状态。
+bool PublishGimbalBoardState(const robot::GimbalChassisComm::GimbalData &state);
+bool PublishChassisVelocity(const robot::ChassisCommand &command,
+                            robot::ChassisMode mode, bool control_enabled);
+struct GimbalMotorFeedbackSnapshot {
+  robot::GimbalMotion angle{};
+  bool yaw_valid=false;
+  bool pitch_valid=false;
+  uint32_t yaw_last_rx_ms=0;
+  uint32_t pitch_last_rx_ms=0;
+};
+// 由现有CAN回调在电机decode成功后记录，0=yaw，1=pitch。
+void RecordGimbalMotorFeedback(int axis);
+void GetGimbalMotorFeedbackSnapshot(GimbalMotorFeedbackSnapshot &snapshot);
 
 #endif
 

@@ -27,8 +27,43 @@
 #include "iwdg.h"
 #include "ins_motor.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
+#include "gimbal_chassis_comm.hpp"
+#include "ins_imu.hpp"
+#include "imu.hpp"
 /* Exported function definitions ---------------------------------------------*/
 static volatile bool comm_initialized = false;
+
+
+namespace {
+// 状态/速度帧固定8字节。直接检查HAL提交结果，计数和忙状态策略留第10项。
+bool TryQueueBoardFrame(uint32_t id, const uint8_t data[8]) {
+  if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1)==0) return false;
+  CAN_TxHeaderTypeDef header{};
+  header.StdId=id;header.IDE=CAN_ID_STD;header.RTR=CAN_RTR_DATA;header.DLC=8;
+  uint32_t mailbox=0;
+  return HAL_CAN_AddTxMessage(&hcan1,&header,const_cast<uint8_t *>(data),&mailbox)==HAL_OK;
+}
+}
+
+bool PublishChassisBoardState(const robot::GimbalChassisComm::ChassisData &state) {
+  return GetGimbalChassisComm()->setLocalChassis(state);
+}
+namespace {
+void TransmitBoardStatus() {
+  auto *comm=GetGimbalChassisComm();
+  auto state=comm->localChassis();
+  hello_world::imu::ImuSnapshot imu{};
+  state.imu_ready=GetImu()->getSnapshot(imu);
+  // local_ready还需由Robot确认电机、配置等；此处只能进一步收紧。
+  state.local_ready=state.local_ready&&state.imu_ready;
+  if(!state.local_ready)state.emergency_stop=true;
+  if(state.emergency_stop)state.target_valid=false;
+  if(!comm->setLocalChassis(state))return;
+  uint8_t data[8]{};
+  if(HAL_CAN_GetTxMailboxesFreeLevel(&hcan1)>0&&comm->encode(data)&&
+     TryQueueBoardFrame(comm->tx_id(),data))comm->onTxQueued(comm->tx_id());
+}
+}
 
 void CommTaskInit(void) {
   /* TODO【新人任务】:
@@ -71,7 +106,7 @@ void CommTaskInit(void) {
   }
 
   comm_initialized = true;
-  // 遥控器接收还未写
+  // 本板遥控操作来自云台速度帧，不启动第二套DBUS接收。
 }
 
 void CommTask(void) {
@@ -84,6 +119,8 @@ void CommTask(void) {
   if (!comm_initialized) {
     return;
   }
+  TransmitBoardStatus();  // CAN1状态发送独立于后续CAN2电机发送
+  // TODO第10项：统一邮箱忙状态及喂狗策略，当前保留原有喂狗路径。
   uint8_t tx_data[8] = {0};
 
   for (int idx = 0; idx < 4; ++idx) {

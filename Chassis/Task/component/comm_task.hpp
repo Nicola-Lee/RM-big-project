@@ -25,6 +25,9 @@ void CommTaskInit(void);
 void CommTask(void);
 #ifdef __cplusplus
 }
+#include "gimbal_chassis_comm.hpp"
+// 第9项Robot每周期发布本地生命状态/模式；传输层不把心跳等同于Working。
+bool PublishChassisBoardState(const robot::GimbalChassisComm::ChassisData &state);
 #endif
 
 #endif /* CHASSIS_TASK_COMM_TASK_HPP_ */

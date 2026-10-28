@@ -19,6 +19,9 @@
 #include "iwdg.h"
 #include "ins_motor.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
+#include "gimbal_chassis_comm.hpp"
+#include "ins_imu.hpp"
+#include "imu.hpp"
 #include <cstdint>
 #include "ins_comm.hpp"
 #include "usart.h"
@@ -168,6 +171,86 @@ void RemoteControlRxPoll(void)
   __set_PRIMASK(saved_primask);
 }
 
+
+namespace {
+// 状态/速度帧固定8字节。直接检查HAL提交结果，计数和忙状态策略留第10项。
+bool TryQueueBoardFrame(uint32_t id, const uint8_t data[8]) {
+  if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1)==0) return false;
+  CAN_TxHeaderTypeDef header{};
+  header.StdId=id;header.IDE=CAN_ID_STD;header.RTR=CAN_RTR_DATA;header.DLC=8;
+  uint32_t mailbox=0;
+  return HAL_CAN_AddTxMessage(&hcan1,&header,const_cast<uint8_t *>(data),&mailbox)==HAL_OK;
+}
+}
+
+namespace {
+uint32_t joint_last_rx_ms[2]={0,0};
+bool joint_has_feedback[2]={false,false};
+}
+void RecordGimbalMotorFeedback(int axis) {
+  if(axis<0||axis>1)return;
+  joint_last_rx_ms[axis]=hello_world::tick::GetTickMs();
+  joint_has_feedback[axis]=true;
+}
+void GetGimbalMotorFeedbackSnapshot(GimbalMotorFeedbackSnapshot &out) {
+  const uint32_t saved=__get_PRIMASK();__disable_irq();
+  const uint32_t now=hello_world::tick::GetTickMs();
+  auto *yaw=static_cast<hello_world::motor::DM_J4310 *>(GetMotorYaw());
+  auto *pitch=static_cast<hello_world::motor::DM_J4310 *>(GetMotorPitch());
+  out={};out.yaw_last_rx_ms=joint_last_rx_ms[0];out.pitch_last_rx_ms=joint_last_rx_ms[1];
+  using Dm=hello_world::motor::DaMiao;
+  out.yaw_valid=robot::board_protocol::Fresh(joint_has_feedback[0],now,joint_last_rx_ms[0])&&
+      yaw->is_enabled()&&yaw->status_code()==Dm::StatusCode::kMotorEnabled;
+  out.pitch_valid=robot::board_protocol::Fresh(joint_has_feedback[1],now,joint_last_rx_ms[1])&&
+      pitch->is_enabled()&&pitch->status_code()==Dm::StatusCode::kMotorEnabled;
+  if(out.yaw_valid)out.angle.yaw=yaw->angle();
+  if(out.pitch_valid)out.angle.pitch=pitch->angle();
+  __set_PRIMASK(saved);
+  out.yaw_valid=out.yaw_valid&&robot::board_protocol::AngleValid(out.angle.yaw);
+  out.pitch_valid=out.pitch_valid&&robot::board_protocol::AngleValid(out.angle.pitch);
+  if(!out.yaw_valid)out.angle.yaw=0;
+  if(!out.pitch_valid)out.angle.pitch=0;
+}
+bool PublishGimbalBoardState(const robot::GimbalChassisComm::GimbalData &state) {
+  return GetGimbalChassisComm()->setLocalGimbal(state);
+}
+bool PublishChassisVelocity(const robot::ChassisCommand &command,
+                            robot::ChassisMode mode,bool control_enabled) {
+  RemoteControlSnapshot remote{};
+  const bool online=GetRemoteControlSnapshot(remote);
+  robot::GimbalChassisComm::VelocityData data{};
+  data.command=command;data.mode=mode;data.remote_online=online;
+  data.emergency_stop=!control_enabled||!online;
+  data.valid=control_enabled&&online&&mode!=robot::ChassisMode::Disabled;
+  auto *comm=GetGimbalChassisComm();
+  if(!robot::board_protocol::Valid(data)) {
+    // 非法发布立即覆盖旧速度，不能继续发送上一个有效命令。
+    comm->publishVelocity({});return false;
+  }
+  return comm->publishVelocity(data);
+}
+namespace {
+void TransmitBoardStatusAndVelocity() {
+  auto *comm=GetGimbalChassisComm();
+  auto state=comm->localGimbal();
+  hello_world::imu::ImuSnapshot imu{};
+  GimbalMotorFeedbackSnapshot joint{};GetGimbalMotorFeedbackSnapshot(joint);
+  RemoteControlSnapshot remote{};const bool remote_online=GetRemoteControlSnapshot(remote);
+  state.imu_ready=GetImu()->getSnapshot(imu);
+  state.feedback=joint.angle;state.yaw_feedback_valid=joint.yaw_valid;
+  state.pitch_feedback_valid=joint.pitch_valid;
+  state.local_ready=state.local_ready&&state.imu_ready&&joint.yaw_valid&&joint.pitch_valid;
+  state.emergency_stop=state.emergency_stop||!remote_online||!state.local_ready;
+  if(!comm->setLocalGimbal(state))return;
+  uint8_t data[8]{};
+  if(HAL_CAN_GetTxMailboxesFreeLevel(&hcan1)>0&&comm->encode(data)&&
+     TryQueueBoardFrame(comm->tx_id(),data))comm->onTxQueued(comm->tx_id());
+  // 速度与状态分开尝试发送；不等待对方应答，不阻塞控制中断。
+  if(HAL_CAN_GetTxMailboxesFreeLevel(&hcan1)>0&&comm->encodeVelocity(data,remote_online))
+    TryQueueBoardFrame(robot::board_protocol::kVelocityId,data);
+}
+}
+
 void CommTaskInit(void) {
   /* TODO【新人任务】:
    * 通讯层一次性初始化：
@@ -276,8 +359,8 @@ void CommTask(void) {
     }
   }
 
+  TransmitBoardStatusAndVelocity();
   HAL_IWDG_Refresh(&hiwdg);
-  //还差双板协议编码
 }
 
 /* Private function definitions ----------------------------------------------*/

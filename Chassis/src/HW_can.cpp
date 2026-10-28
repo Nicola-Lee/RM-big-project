@@ -99,11 +99,12 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
       rx_header1.DLC == 8) {
 
       // 云台和底盘的通信帧
-      if (rx_header1.StdId == 0x211) {
+      if (rx_header1.StdId == robot::board_protocol::kGimbalStatusId ||
+          rx_header1.StdId == robot::board_protocol::kVelocityId) {
         auto *comm = GetGimbalChassisComm();
 
         if (comm != nullptr) {
-          comm->decode(can1_rx_data);
+          comm->decode(rx_header1.StdId, can1_rx_data, rx_header1.DLC);
         }
       }
     }

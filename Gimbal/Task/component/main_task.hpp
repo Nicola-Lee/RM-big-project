@@ -23,6 +23,23 @@ extern "C" {
 /* Exported function prototypes ----------------------------------------------*/
 void MainTaskInit(void);
 void MainTask(void);
+
+// 前台IMU调度状态；kImuPollSampling包括零漂采集和姿态收敛。
+typedef enum {
+  kImuPollWaitingForInit = 0,
+  kImuPollWaitingForConfig,
+  kImuPollWaitingForTimer,
+  kImuPollTimingError,
+  kImuPollStarting,
+  kImuPollSampling,
+  kImuPollReady,
+  kImuPollFault
+} ImuPollStatus;
+
+// 只从main.c主循环调用；控制中断通过GetImu()->getSnapshot()读取有效数据。
+void ImuPoll(void);
+ImuPollStatus GetImuPollStatus(void);
+
 #ifdef __cplusplus
 }
 #endif

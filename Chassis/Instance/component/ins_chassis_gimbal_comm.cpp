@@ -38,8 +38,8 @@ robot::GimbalChassisComm *GetGimbalChassisComm() {
    */
   static robot::GimbalChassisComm comm(
       robot::GimbalChassisComm::CodePart::Chassis,
-      0x210,  // 发送到云台信息
-      0x211   // 接受云台信息
+      robot::board_protocol::kChassisStatusId,  // 底盘状态
+      robot::board_protocol::kGimbalStatusId    // 云台状态
   );
   return &comm;
 }

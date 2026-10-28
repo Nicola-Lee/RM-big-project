@@ -116,8 +116,12 @@ int main(void)
   HAL_TIM_Base_Start_IT(&htim4);
   HAL_GPIO_WritePin(GPIOH, GPIO_PIN_11, GPIO_PIN_RESET);
   MainTaskInit();
-  HAL_TIM_Base_Start_IT(&htim2);
-  HAL_TIM_Base_Start_IT(&htim6);
+  if (HAL_TIM_Base_Start(&htim2) != HAL_OK) {
+    Error_Handler();
+  }
+  if (HAL_TIM_Base_Start_IT(&htim6) != HAL_OK) {
+    Error_Handler();
+  }
   /* TODO【新人任务】:
    * 在进入 while(1) 之前调用 MainTaskInit()，完成电机 / IMU / 通讯 / IWDG 的
    * 一次性初始化。此后的控制与通讯周期由 htim6 中断驱动（见 Task/main_task.cpp）。
@@ -130,8 +134,9 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-    RemoteControlRxPoll();
     /* USER CODE BEGIN 3 */
+    RemoteControlRxPoll();
+    ImuPoll();
   }
   /* USER CODE END 3 */
 }

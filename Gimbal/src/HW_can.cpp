@@ -25,6 +25,7 @@
 #include "ins_motor.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
 #include "gimbal_chassis_comm.hpp"
+#include "comm_task.hpp"
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
 static CAN_RxHeaderTypeDef rx_header2;
@@ -103,13 +104,13 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
           rx_header1.StdId == 
               hello_world::motor::DaMiao::GetRxId(yaw->id())) {
 
-        yaw->decode(can1_rx_data);
+        if (yaw->decode(can1_rx_data)) RecordGimbalMotorFeedback(0);
         
-      } else if (rx_header1.StdId == 0x210) {
+      } else if (rx_header1.StdId == robot::board_protocol::kChassisStatusId) {
         auto *comm = GetGimbalChassisComm();
 
         if (comm != nullptr) {
-          comm->decode(can1_rx_data);
+          comm->decode(rx_header1.StdId, can1_rx_data, rx_header1.DLC);
         }
       }
     }
@@ -140,7 +141,7 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
           rx_header2.StdId ==
               hello_world::motor::DaMiao::GetRxId(pitch->id())) {
 
-        pitch->decode(can2_rx_data);
+        if (pitch->decode(can2_rx_data)) RecordGimbalMotorFeedback(1);
       }
     }
   }

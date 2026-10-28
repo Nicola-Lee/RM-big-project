@@ -111,9 +111,13 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_GPIO_WritePin(GPIOH, GPIO_PIN_11, GPIO_PIN_RESET);
   MainTaskInit();
-  HAL_TIM_Base_Start_IT(&htim2);
+  if (HAL_TIM_Base_Start(&htim2) != HAL_OK) {
+    Error_Handler();
+  }
   HAL_TIM_Base_Start_IT(&htim4);
-  HAL_TIM_Base_Start_IT(&htim6);
+  if (HAL_TIM_Base_Start_IT(&htim6) != HAL_OK) {
+    Error_Handler();
+  }
 
   /* USER CODE END 2 */
 
@@ -124,6 +128,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    ImuPoll();
   }
   /* USER CODE END 3 */
 }
