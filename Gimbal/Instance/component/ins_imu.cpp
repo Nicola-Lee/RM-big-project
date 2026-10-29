@@ -28,15 +28,15 @@ namespace {
 // 配置集中在此处；两块板分别填写，确认后重新编译烧录。
 // 现有 GPIO 已初始化 PA4/PB0 为输出高电平，但未标明传感器对应关系。
 constexpr bool kImuChipSelectConfirmed = false;
-constexpr bool kImuMountingConfirmed = false;
+constexpr bool kImuMountingConfirmed = true;  // 用户已确认传感器三轴与云台三轴同向
 
 // 候选片选：必须用本板原理图核实后再将上面的标志设为 true。
 constexpr uint32_t kAccCsPin = GPIO_PIN_4;   // GPIOA
 constexpr uint32_t kGyroCsPin = GPIO_PIN_0;  // GPIOB
 
-// v_module = R * v_sensor。此单位阵只是占位，不代表已确认实车安装。
+// v_module = R * v_sensor。三轴与云台同向，使用单位矩阵。
 // 云台模块坐标：X枪口向前、Y云台向左、Z向上。
-// 例如模块 X 对应传感器 -Y，则 R 的第一行为 {0,-1,0}。
+// 无需交换坐标轴或取反；片选仍需独立确认。
 constexpr float kImuRotation[9] = {
     1.0f, 0.0f, 0.0f,
     0.0f, 1.0f, 0.0f,

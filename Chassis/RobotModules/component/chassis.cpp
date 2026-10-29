@@ -92,6 +92,14 @@ bool Chassis::update(const ChassisControlInput &input) {
   ChassisResult next{};
   if (!ToChassisFrame(input.command, input.relative_yaw_rad, body) ||
       !SolveBody(body, params_, next)) return fail();
+  // 有效的全零速度命令表示零电流停车；不执行制动PID，也不保留积分。
+  // 保留输入、反馈和配置检查；停车成功不应使Robot误判为控制故障。
+  if(input.command.vx==0.0f&&input.command.vy==0.0f&&input.command.w==0.0f){
+    stop();
+    next.active=true;
+    result_=next;
+    return true;
+  }
   WheelValues feedforward{};
   for (std::size_t i = 0; i < motors_.size(); ++i) {
     feedforward[i] = params_.velocity_feedforward_gain[i] * next.wheel_target_rad_s[i];

@@ -15,6 +15,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "ins_robot.hpp"
 #include "robot.hpp"
+#include "robot_limits.hpp"
 #include "ins_imu.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
 #include "chassis.hpp"
@@ -33,7 +34,7 @@ robot::Robot *GetRobot() {
     robot::ChassisRobotParams params;
     // 待实机配置：分量速度m/s、角速度rad/s、加速度m/s^2和rad/s^2。
     params.max_axis_speed_m_s=0.0f;
-    params.max_body_rate_rad_s=0.0f;
+    params.max_body_rate_rad_s=robot::limits::kMaxBodyRateRadS;
     params.linear_accel_m_s2=0.0f;
     params.angular_accel_rad_s2=0.0f;
     // 跟随PID独立整定，输出为底盘角速度rad/s；四轮PID仍在ins_pid.cpp。

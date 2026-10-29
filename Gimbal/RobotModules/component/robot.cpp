@@ -13,10 +13,12 @@
  *******************************************************************************
  */
 #include "robot.hpp"
+#include "robot_limits.hpp"
 #include "imu.hpp"
 #include "motor_DaMiao.hpp"
 #include "comm_task.hpp"
 #include "tick.hpp"
+#include "runtime_monitor.hpp"
 namespace robot {
 namespace {
 bool Positive(float v){return control::Finite(v)&&v>0.0f&&v<=board_protocol::kMaxVelocity;}
@@ -48,8 +50,11 @@ bool Robot::paramsReady()const{
      !Positive(params_.max_manual_body_rate_rad_s)||!Positive(params_.max_spin_rate_rad_s)||
      !Positive(params_.max_yaw_input_rate_rad_s)||!Positive(params_.max_pitch_input_rate_rad_s))return false;
   // 给底盘转动补偿留出目标变化率，不能只按操作手yaw速度设置关节限速。
-  return gimbal_->yawTargetRateLimit()>=params_.max_manual_body_rate_rad_s+params_.max_yaw_input_rate_rad_s&&
-         gimbal_->yawTargetRateLimit()>=params_.max_spin_rate_rad_s+params_.max_yaw_input_rate_rad_s&&
+  // 共享上限同时覆盖跟随模式；手动/小陀螺请求也不能超过底盘允许值。
+  return Positive(limits::kMaxBodyRateRadS)&&
+         limits::YawRateBudgetValid(limits::kMaxBodyRateRadS,
+             params_.max_manual_body_rate_rad_s,params_.max_spin_rate_rad_s,
+             params_.max_yaw_input_rate_rad_s,gimbal_->yawTargetRateLimit())&&
          gimbal_->pitchTargetRateLimit()>=params_.max_pitch_input_rate_rad_s;
 }
 void Robot::resetControl(){
@@ -95,6 +100,7 @@ void Robot::update(float dt){
   if(!remote_online)in.inhibit=control::StopReason::RemoteOffline;
   else if(!operator_armed)in.inhibit=control::StopReason::EmergencyStop;
   else if(!peer.online)in.inhibit=control::StopReason::PeerOffline;
+  else if(!runtime::CanMotionAllowed())in.inhibit=control::StopReason::CommunicationFault;
   else if(!paramsReady()||imu_->state()==hello_world::imu::ImuState::Uninitialized)in.inhibit=control::StopReason::Configuration;
   else if(imu_->state()==hello_world::imu::ImuState::Fault)in.inhibit=control::StopReason::ImuNotReady;
   else if(joint.yaw_fault||joint.pitch_fault)in.inhibit=control::StopReason::MotorNotReady;
@@ -152,7 +158,7 @@ void Robot::update(float dt){
   }
 }
 control::MotorAction Robot::motorAction()const{
-  if(!initialized_||!updated_||static_cast<uint32_t>(hello_world::tick::GetTickMs()-diagnostic_.last_update_ms)>=20u)
+  if(!runtime::CanMotionAllowed()||!initialized_||!updated_||static_cast<uint32_t>(hello_world::tick::GetTickMs()-diagnostic_.last_update_ms)>=20u)
     return control::MotorAction::Disable;
   RemoteControlSnapshot remote{};
   if(!GetRemoteControlSnapshot(remote)||!ChannelsValid(remote)||!control::OperatorArmed(remote.rc_r_switch)||

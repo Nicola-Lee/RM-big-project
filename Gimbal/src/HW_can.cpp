@@ -26,12 +26,13 @@
 #include "ins_chassis_gimbal_comm.hpp"
 #include "gimbal_chassis_comm.hpp"
 #include "comm_task.hpp"
+#include "runtime_monitor.hpp"
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
 static CAN_RxHeaderTypeDef rx_header2;
 static uint8_t can1_rx_data[8];
 static uint8_t can2_rx_data[8];
-static uint32_t p_tx_mailbox;
+
 
 /* Exported function definitions ---------------------------------------------*/
 
@@ -64,15 +65,13 @@ void CanFilter_Init(CAN_HandleTypeDef *hcan)
   }
 }
 
-void CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
-                  uint8_t len)
-{
-  CAN_TxHeaderTypeDef tx_header = {0};
-  tx_header.StdId = id;
-  tx_header.IDE = CAN_ID_STD;
-  tx_header.RTR = CAN_RTR_DATA;
-  tx_header.DLC = len;
-  HAL_CAN_AddTxMessage(hcan, &tx_header, msg, &p_tx_mailbox);
+void CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id, uint8_t len) {
+  // 兼容旧接口；普通电机运动帧不能绕过Robot许可。安全零转矩/失能由CommTask专用路径发送。
+  const bool control=(id>=1&&id<=0x0F)||id==0x200||id==0x1FF||
+      (id==robot::board_protocol::kVelocityId&&msg!=nullptr&&len==8&&(msg[7]&4)!=0);
+  if(hcan==&hcan1)robot::runtime::TrySend(robot::runtime::CanBus::One,id,msg,control,len);
+  else if(hcan==&hcan2)robot::runtime::TrySend(robot::runtime::CanBus::Two,id,msg,control,len);
+  else robot::runtime::SetFatal(robot::runtime::Fatal::InvalidCanArgument);
 }
 
 /**
@@ -146,4 +145,37 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
     }
   }
   HAL_CAN_ActivateNotification(hcan, CAN_IT_RX_FIFO1_MSG_PENDING);
+}
+
+namespace {
+bool RuntimeBus(CAN_HandleTypeDef *hcan,robot::runtime::CanBus &bus){
+  if(hcan==&hcan1){bus=robot::runtime::CanBus::One;return true;}
+  if(hcan==&hcan2){bus=robot::runtime::CanBus::Two;return true;}
+  return false;
+}
+}
+extern "C" void HAL_CAN_TxMailbox0CompleteCallback(CAN_HandleTypeDef *h){
+  robot::runtime::CanBus b;if(RuntimeBus(h,b))robot::runtime::OnCanComplete(b,0);
+}
+extern "C" void HAL_CAN_TxMailbox1CompleteCallback(CAN_HandleTypeDef *h){
+  robot::runtime::CanBus b;if(RuntimeBus(h,b))robot::runtime::OnCanComplete(b,1);
+}
+extern "C" void HAL_CAN_TxMailbox2CompleteCallback(CAN_HandleTypeDef *h){
+  robot::runtime::CanBus b;if(RuntimeBus(h,b))robot::runtime::OnCanComplete(b,2);
+}
+extern "C" void HAL_CAN_TxMailbox0AbortCallback(CAN_HandleTypeDef *h){
+  robot::runtime::CanBus b;if(RuntimeBus(h,b))robot::runtime::OnCanAbort(b,0);
+}
+extern "C" void HAL_CAN_TxMailbox1AbortCallback(CAN_HandleTypeDef *h){
+  robot::runtime::CanBus b;if(RuntimeBus(h,b))robot::runtime::OnCanAbort(b,1);
+}
+extern "C" void HAL_CAN_TxMailbox2AbortCallback(CAN_HandleTypeDef *h){
+  robot::runtime::CanBus b;if(RuntimeBus(h,b))robot::runtime::OnCanAbort(b,2);
+}
+extern "C" void HAL_CAN_ErrorCallback(CAN_HandleTypeDef *h){
+  robot::runtime::CanBus b;if(!RuntimeBus(h,b))return;
+  const uint32_t saved=__get_PRIMASK();__disable_irq();
+  robot::runtime::OnCanError(b,HAL_CAN_GetError(h));
+  // 已将错误复制到诊断，再清HAL累计位，避免旧错误污染后续事件分类。
+  HAL_CAN_ResetError(h);__set_PRIMASK(saved);
 }

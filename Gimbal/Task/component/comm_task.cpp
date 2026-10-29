@@ -16,7 +16,6 @@
 #include "comm_task.hpp"
 #include "HW_can.hpp"
 #include "can.h"
-#include "iwdg.h"
 #include "ins_motor.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
 #include "gimbal_chassis_comm.hpp"
@@ -24,6 +23,7 @@
 #include "imu.hpp"
 #include "ins_robot.hpp"
 #include "robot.hpp"
+#include "runtime_monitor.hpp"
 #include <cstdint>
 #include "ins_comm.hpp"
 #include "usart.h"
@@ -175,13 +175,10 @@ void RemoteControlRxPoll(void)
 
 
 namespace {
-// 状态/速度帧固定8字节。直接检查HAL提交结果，计数和忙状态策略留第10项。
+// 所有发送统一记录入邮箱结果、忙状态和完成回调；此处不等待总线。
 bool TryQueueBoardFrame(uint32_t id, const uint8_t data[8]) {
-  if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1)==0) return false;
-  CAN_TxHeaderTypeDef header{};
-  header.StdId=id;header.IDE=CAN_ID_STD;header.RTR=CAN_RTR_DATA;header.DLC=8;
-  uint32_t mailbox=0;
-  return HAL_CAN_AddTxMessage(&hcan1,&header,const_cast<uint8_t *>(data),&mailbox)==HAL_OK;
+  const bool control=id==robot::board_protocol::kVelocityId&&(data[7]&4)!=0;
+  return robot::runtime::TrySend(robot::runtime::CanBus::One,id,data,control);
 }
 }
 
@@ -255,12 +252,12 @@ void TransmitBoardStatusAndVelocity() {
       robot::control::ModeFromSwitch(remote.rc_l_switch)!=robot::ChassisMode::Disabled;
   state.emergency_stop=state.emergency_stop||!state.operator_armed||
       (state.life==robot::LifeState::Working&&!state.local_ready);
-  if(!comm->setLocalGimbal(state))return;
+  if(!comm->setLocalGimbal(state)){robot::runtime::SetFatal(robot::runtime::Fatal::Encoder);return;}
   uint8_t data[8]{};
-  if(HAL_CAN_GetTxMailboxesFreeLevel(&hcan1)>0&&comm->encode(data)&&
+  if(robot::runtime::CanMailboxAvailable(robot::runtime::CanBus::One)&&comm->encode(data)&&
      TryQueueBoardFrame(comm->tx_id(),data))comm->onTxQueued(comm->tx_id());
   // 速度与状态分开尝试发送；不等待对方应答，不阻塞控制中断。
-  if(HAL_CAN_GetTxMailboxesFreeLevel(&hcan1)>0&&comm->encodeVelocity(data,remote_online))
+  if(robot::runtime::CanMailboxAvailable(robot::runtime::CanBus::One)&&comm->encodeVelocity(data,remote_online))
     TryQueueBoardFrame(robot::board_protocol::kVelocityId,data);
 }
 }
@@ -271,7 +268,7 @@ void CommTaskInit(void) {
    *   1. 初始化 CAN 滤波器：inc/HW_can.hpp 的 CanFilter_Init(&hcan1) / CanFilter_Init(&hcan2)。
    *   2. 启动遥控器串口空闲 + DMA 接收（18 字节 DBUS，见 inc/DT7.hpp 注释）：
    *      调用 HAL_UARTEx_ReceiveToIdle_DMA 并记录接收缓冲区。
-   *   3. 启动 / 刷新独立看门狗 IWDG（inc/iwdg.h）。
+   *   3. IWDG由main初始化、WatchdogPoll集中刷新；通信任务只记录进度。
    */
   GetMotorYaw();
   GetMotorPitch();
@@ -329,51 +326,41 @@ void CommTaskInit(void) {
 
   __set_PRIMASK(saved_primask);
 
+  const uint32_t tx_error_notifications=CAN_IT_TX_MAILBOX_EMPTY|CAN_IT_BUSOFF|
+      CAN_IT_ERROR_WARNING|CAN_IT_ERROR_PASSIVE|CAN_IT_ERROR;
+  if(HAL_CAN_ActivateNotification(&hcan1,tx_error_notifications|CAN_IT_RX_FIFO0_OVERRUN)!=HAL_OK||
+     HAL_CAN_ActivateNotification(&hcan2,tx_error_notifications|CAN_IT_RX_FIFO1_OVERRUN)!=HAL_OK){
+    Error_Handler();
+  }
   comm_initialized = true;
 }
 
 void CommTask(void) {
-  /* TODO【新人任务】:
-   * 每个通讯周期（1ms）调用一次，把各模块 encode 出的 8 字节 CAN 帧发出去：
-   *   1. 遍历电机：调用 encode(data) 得到 8 字节 + tx_id()，再 CAN_Send_Msg 发出。
-   *   2. 双板通讯对象 encode 后同样发送。
-   *   3. 刷新 IWDG。
-   */
-  if (!comm_initialized) {
-    return;
-  }
-
-  auto *yaw =
-      static_cast<hello_world::motor::DM_J4310 *>(GetMotorYaw());
-
-  auto *pitch =
-      static_cast<hello_world::motor::DM_J4310 *>(GetMotorPitch());
-
-  if (yaw == nullptr || pitch == nullptr) {
-    return;
-  }
-  // Robot在恢复状态排队使能命令；未获正常控制许可时两轴统一清零。
+  using namespace robot::runtime;
+  if(!comm_initialized){SetFatal(Fatal::MissingObject);return;}
+  ServiceCan();
+  auto *yaw=static_cast<hello_world::motor::DM_J4310 *>(GetMotorYaw());
+  auto *pitch=static_cast<hello_world::motor::DM_J4310 *>(GetMotorPitch());
   auto *controller=GetRobot();
-  const auto action=controller==nullptr?robot::control::MotorAction::Disable:controller->motorAction();
-  if(action!=robot::control::MotorAction::Control){yaw->setInput(0.0f);pitch->setInput(0.0f);}
+  if(yaw==nullptr||pitch==nullptr||controller==nullptr){SetFatal(Fatal::MissingObject);return;}
+  const auto action=controller->motorAction();
+  const bool allow_control=action==robot::control::MotorAction::Control;
+  SetControlPermit(allow_control);
+  if(!allow_control){yaw->setInput(0.0f);pitch->setInput(0.0f);}
   if(action==robot::control::MotorAction::Disable){yaw->disable();pitch->disable();}
-  // 先检查空闲再编码
-  if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) > 0) {
-    uint8_t data[8] = {0};
-    if (yaw->encode(data)) {
-      CAN_Send_Msg(&hcan1, data, yaw->tx_id(), 8);
-    }
+  // encode会消耗达妙的一次性指令，先检查邮箱，忙时保留到下一周期。
+  if(CanMailboxAvailable(CanBus::One)){
+    uint8_t data[8]{};
+    if(!yaw->encode(data)){SetFatal(Fatal::Encoder);return;}
+    TrySend(CanBus::One,yaw->tx_id(),data,allow_control);
   }
-
-  if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan2) > 0) {
-    uint8_t data[8] = {0};
-    if (pitch->encode(data)) {
-      CAN_Send_Msg(&hcan2, data, pitch->tx_id(), 8);
-    }
+  if(CanMailboxAvailable(CanBus::Two)){
+    uint8_t data[8]{};
+    if(!pitch->encode(data)){SetFatal(Fatal::Encoder);return;}
+    TrySend(CanBus::Two,pitch->tx_id(),data,allow_control);
   }
-
   TransmitBoardStatusAndVelocity();
-  HAL_IWDG_Refresh(&hiwdg);
+  Mark(Task::Communication);
 }
 
 /* Private function definitions ----------------------------------------------*/

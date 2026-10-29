@@ -38,6 +38,8 @@ typedef enum {
 
 // 只从main.c主循环调用；控制中断通过GetImu()->getSnapshot()读取有效数据。
 void ImuPoll(void);
+// 主循环末尾调用；只有这里可以刷新硬件看门狗。
+void WatchdogPoll(void);
 ImuPollStatus GetImuPollStatus(void);
 
 #ifdef __cplusplus

@@ -21,6 +21,7 @@
 #include "robot.hpp"
 #include "ins_imu.hpp"
 #include "imu.hpp"
+#include "runtime_monitor.hpp"
 #include <cstdint>
 
 
@@ -109,7 +110,7 @@ void ImuPoll(void) {
     }
     imu_sample_counts = ImuSampleCounts(imu_counter_hz);
     imu_poll_status = kImuPollStarting;
-    // 此时TIM6通信/喂狗已运行，阻塞初始化发生在前台，不占用控制中断。
+    // 此时TIM6通信已运行（集中喂狗在主循环末尾），阻塞初始化发生在前台，不占用控制中断。
     if (!imu->start()) {
       imu_poll_status = kImuPollFault;
       return;
@@ -118,6 +119,7 @@ void ImuPoll(void) {
     imu_last_count = __HAL_TIM_GET_COUNTER(&htim2);
     imu_last_ms = HAL_GetTick();
     imu_sampling_started = true;
+    robot::runtime::Mark(robot::runtime::Task::Imu);
     imu_poll_status = kImuPollSampling;
     return;
   }
@@ -139,7 +141,10 @@ void ImuPoll(void) {
   imu_last_count = now_count;
   imu_last_ms = now_ms;
   // 一次只处理一个当前样本，使用实际dt；校准/收敛/快照由Imu类推进。
-  if (!imu->update(dt_s)) {
+  const bool updated=imu->update(dt_s);
+  // 一次读取/处理已完成；硬件读取失败且进入Fault也是有界处理结果。
+  robot::runtime::Mark(robot::runtime::Task::Imu);
+  if (!updated) {
     imu_poll_status = kImuPollFault;
     return;
   }
@@ -150,6 +155,7 @@ void ImuPoll(void) {
 void MainTaskInit(void) {
   // 只执行一次；外设已由main.c初始化，尚未开启TIM6周期中断。
   if (imu_poll_initialized) return;
+  robot::runtime::Initialize();
   imu_instance = GetImu();
   /* TODO【新人任务】:
    * 一次性初始化（由 main() 在 while(1) 之前调用一次）：
@@ -183,7 +189,16 @@ void MainTaskInit(void) {
 void MainTask(void) {
   // 原TIM6的1ms入口。IMU阻塞采样继续在主循环，控制只读取快照。
   auto *controller=GetRobot();
-  if(controller!=nullptr)controller->update(0.001f);
+  if(controller==nullptr){robot::runtime::SetFatal(robot::runtime::Fatal::MissingObject);return;}
+  controller->update(0.001f);
+  robot::runtime::Mark(robot::runtime::Task::Control);
+}
+
+void WatchdogPoll(void) {
+  using State=hello_world::imu::ImuState;
+  const auto state=imu_instance==nullptr?State::Uninitialized:imu_instance->state();
+  const bool sampling=state==State::Calibrating||state==State::Converging||state==State::Ready;
+  robot::runtime::ServiceWatchdog(sampling);
 }
 
 /* Private function definitions ----------------------------------------------*/

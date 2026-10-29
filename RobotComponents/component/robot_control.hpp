@@ -8,7 +8,7 @@ namespace robot::control {
 inline constexpr float kPi=3.14159265358979323846f;
 enum class StopReason:uint8_t {
   None, NotInitialized, RemoteOffline, EmergencyStop, PeerOffline, Configuration,
-  ImuNotReady, MotorNotReady, PeerNotReady, RecoveryTimeout, CommandInvalid, ControlFailed, Timing, NeutralRequired
+  ImuNotReady, MotorNotReady, PeerNotReady, RecoveryTimeout, CommandInvalid, ControlFailed, Timing, NeutralRequired, CommunicationFault
 };
 enum class MotorAction:uint8_t {Disable, EnableZero, Control};
 constexpr bool Finite(float v){return v>=-std::numeric_limits<float>::max()&&v<=std::numeric_limits<float>::max();}

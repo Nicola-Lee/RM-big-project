@@ -129,6 +129,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     ImuPoll();
+    WatchdogPoll();
   }
   /* USER CODE END 3 */
 }
