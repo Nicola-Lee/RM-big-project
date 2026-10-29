@@ -46,7 +46,7 @@ hello_world::motor::Motor *GetMotorWheel(int idx) {
    *     OptionalParams 配置项）。
    */
   if (idx < 0 || idx >= 4) return nullptr;
-  // 初始时云台朝向为x轴正向，左侧为y轴正向，按照象限确定电机ID
+  // 轮位以图示底盘坐标为准，不随云台转动：ID1(+X,+Y)、ID2(-X,+Y)、ID3(-X,-Y)、ID4(+X,-Y)。
   static hello_world::motor::M3508 motors[] = {
       hello_world::motor::M3508(1, WheelOptions()),
       hello_world::motor::M3508(2, WheelOptions()),

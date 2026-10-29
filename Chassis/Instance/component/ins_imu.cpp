@@ -19,10 +19,10 @@
 namespace {
 // 配置集中在此处；两块板分别填写，确认后重新编译烧录。
 // 现有 GPIO 已初始化 PA4/PB0 为输出高电平，但未标明传感器对应关系。
-constexpr bool kImuChipSelectConfirmed = false;
+constexpr bool kImuChipSelectConfirmed = true;  // 暂按加速度计PA4、陀螺仪PB0使用
 constexpr bool kImuMountingConfirmed = false;
 
-// 候选片选：必须用本板原理图核实后再将上面的标志设为 true。
+// 暂用以下片选对应关系；上板时仍需通过芯片ID读取核验。
 constexpr uint32_t kAccCsPin = GPIO_PIN_4;   // GPIOA
 constexpr uint32_t kGyroCsPin = GPIO_PIN_0;  // GPIOB
 

@@ -2,7 +2,7 @@
  * @Author: Nicola Lee nlee15428@gmail.com
  * @Date: 2026-09-19 15:52:24
  * @LastEditors: Nicola Lee nlee15428@gmail.com
- * @LastEditTime: 2026-10-25 21:32:45
+ * @LastEditTime: 2026-10-29 20:02:46
  * @FilePath: \omni_skeleton\Chassis\Instance\component\ins_pid.cpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -43,10 +43,11 @@ hello_world::pid::Pid *GetPidMotorWheel(int idx) {
     return nullptr;
   }
 
-  static constexpr float kWheelIntegralLimit = 0.0f;
-  static constexpr float kWheelOutputLimit = 0.0f;
+  static constexpr float kWheelIntegralLimit = 200.0f;
+  static constexpr float kWheelOutputLimit = 1000.0f;
 
   static const hello_world::pid::PidParams params[4] = {
+      // 此处分别调四个电机的PID参数
       // 左前轮，ID1
       {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f,
       .integral_limit = kWheelIntegralLimit,

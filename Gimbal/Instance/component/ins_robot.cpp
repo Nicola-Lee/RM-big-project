@@ -1,3 +1,11 @@
+/*
+ * @Author: Nicola Lee nlee15428@gmail.com
+ * @Date: 2026-10-07 13:04:26
+ * @LastEditors: Nicola Lee nlee15428@gmail.com
+ * @LastEditTime: 2026-10-29 19:59:03
+ * @FilePath: \omni_skeleton\Gimbal\Instance\component\ins_robot.cpp
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ */
 /**
  *******************************************************************************
  * @file      :ins_robot.cpp
@@ -35,12 +43,18 @@ robot::Robot *GetRobot() {
     params.switch_mapping_confirmed=true;
     params.deadband=0.03f;
     // 正方向：前进/左移/左转/下俯/底盘逆时针；实际遥控方向仍需上板核对。
-    params.forward_sign=1.0f;params.left_sign=-1.0f;
-    params.yaw_sign=-1.0f;params.pitch_sign=-1.0f;params.wheel_sign=1.0f;
+    params.forward_sign=1.0f;
+    params.left_sign=-1.0f;
+    params.yaw_sign=-1.0f;
+    params.pitch_sign=-1.0f;
+    params.wheel_sign=1.0f;
     // 待实机配置；零值表示尚未配置，状态机禁止进入正常控制。
-    params.max_forward_m_s=0.0f;params.max_left_m_s=0.0f;
-    params.max_manual_body_rate_rad_s=0.0f;params.max_spin_rate_rad_s=0.0f;
-    params.max_yaw_input_rate_rad_s=0.0f;params.max_pitch_input_rate_rad_s=0.0f;
+    params.max_forward_m_s=0.3f;
+    params.max_left_m_s=0.3f;
+    params.max_manual_body_rate_rad_s=0.5f;
+    params.max_spin_rate_rad_s=0.5f;
+    params.max_yaw_input_rate_rad_s=0.3f;
+    params.max_pitch_input_rate_rad_s=0.3f;
     // 恢复时先回中100ms，再进行双方就绪握手，防止恢复即追赶旧摇杆请求。
     params.require_neutral_on_recovery=true;
     auto *yaw=static_cast<hello_world::motor::DM_J4310 *>(GetMotorYaw());
@@ -54,17 +68,16 @@ robot::Gimbal *GetGimbal() {
   static robot::Gimbal gimbal;
   static const bool initialized = []() {
     robot::GimbalParams params;
-    // 必须按当前 angle_offset/dir 标定后的 angle() 填写；pitch 下俯为正。
-    // PDF 第8页要求软件限位，第11页仅给零点偏移0.02480，未给上下限。
-    // 未标定时对象可初始化，但 update 禁止输出。
+    // pitch 下俯为正
+    // 暂定pitch轴俯仰角为30°，保留false还未确认
     params.pitch_limits_calibrated = false;
-    params.pitch_min_rad = 0.0f;
-    params.pitch_max_rad = 0.0f;
+    params.pitch_min_rad = -0.5235988f;
+    params.pitch_max_rad = +0.5235988f;
     // 目标变化率（rad/s）和模块转矩上限（N*m），0 表示待配置。
-    params.yaw_target_rate_rad_s = 0.0f;
-    params.pitch_target_rate_rad_s = 0.0f;
-    params.yaw_torque_limit_nm = 0.0f;
-    params.pitch_torque_limit_nm = 0.0f;
+    params.yaw_target_rate_rad_s = 1.0f;
+    params.pitch_target_rate_rad_s = 0.3f;
+    params.yaw_torque_limit_nm = 0.3f;
+    params.pitch_torque_limit_nm = 0.3f;
     // 前馈默认关闭；位置 PID 参数继续在 ins_pid.cpp 中分别整定。
     params.yaw_velocity_ff = 0.0f;
     params.pitch_velocity_ff = 0.0f;
