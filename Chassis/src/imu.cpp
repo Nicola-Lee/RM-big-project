@@ -112,6 +112,27 @@ void QuaternionToEuler(const float q[4], float euler[3])
 
 }  // namespace
 
+void Imu::setFault(ImuFaultReason reason)
+{
+  // 保留第一次触发的原因、阶段和时刻，后续轮询不覆盖现场。
+  if (fault_reason_ == ImuFaultReason::None) {
+    fault_reason_ = reason;
+    fault_from_state_ = state_;
+    fault_ms_ = hello_world::tick::GetTickMs();
+  }
+  state_ = ImuState::Fault;
+}
+
+void Imu::reportTimingFault(ImuFaultReason reason)
+{
+  if (__get_IPSR() != 0) return;
+  if (reason == ImuFaultReason::TimerStopped ||
+      reason == ImuFaultReason::TimerConfiguration ||
+      reason == ImuFaultReason::SamplingGap) {
+    setFault(reason);
+  }
+}
+
 bool Imu::init(const BMI088HWConfig &hw_config,
                const float rotation_matrix[9],
                const ImuParams &params,
@@ -161,7 +182,7 @@ bool Imu::init(const BMI088HWConfig &hw_config,
       sensor_config.acc_osr > kBMI088AccOsrNormal ||
       sensor_config.gyro_range > kBMI088GyroRange125Dps ||
       sensor_config.gyro_odr_fbw > kBMI088GyroOdrFbw100_32) {
-    state_ = ImuState::Fault;
+    setFault(ImuFaultReason::InvalidConfiguration);
     return false;
   }
 
@@ -195,9 +216,14 @@ bool Imu::start()
   sensor_error_ = sensor_.imuInit(false);
 
   if (sensor_error_ != kBMI088ErrStateNoErr) {
-    state_ = ImuState::Fault;
+    setFault(ImuFaultReason::SensorInitialization);
     return false;
   }
+
+  // Bosch BMI08x设计指南：加速度计由挂起进入正常模式后等待50ms。
+  // start()仅由前台调用；Configured状态下保持输出禁止，TIM6仍正常运行。
+  // ImuPoll在start()返回后重新记录采样时间，因此不会把此等待计入首帧dt。
+  HAL_Delay(50);
 
   state_ = ImuState::Calibrating;
   restartCalibration();
@@ -245,6 +271,7 @@ void Imu::restartCalibration()
 
 bool Imu::update(float dt_s)
 {
+  last_dt_s_ = dt_s;
   // 本步骤使用阻塞 SPI 读取，只允许在前台执行。
   if (__get_IPSR() != 0) {
     return false;
@@ -279,14 +306,15 @@ bool Imu::update(float dt_s)
   if (calibration_timeout ||
       convergence_timeout ||
       data_timeout) {
-    state_ = ImuState::Fault;
+    setFault(calibration_timeout ? ImuFaultReason::CalibrationTimeout :
+        (convergence_timeout ? ImuFaultReason::ConvergenceTimeout : ImuFaultReason::DataTimeout));
     return false;
   }
 
   if (!std::isfinite(dt_s) ||
     dt_s <= 0.0f ||
     dt_s > 0.02f) {
-    state_ = ImuState::Fault;
+    setFault(ImuFaultReason::InvalidDt);
     return false;
   }
 
@@ -295,8 +323,15 @@ bool Imu::update(float dt_s)
 
   // 暂时不读取温度。
   if (!sensor_.getDataChecked(acc, gyro, nullptr)) {
-    state_ = ImuState::Fault;
+    setFault(ImuFaultReason::SensorRead);
     return false;
+  }
+
+  // 保留本次成功SPI读取的值（包括异常值），故障时可直接观察现场。
+  // 有限性和模长检查仍在后面，异常数据不会进入校准或姿态解算。
+  for (int i = 0; i < 3; ++i) {
+    acc_[i] = acc[i];
+    gyro_raw_[i] = gyro[i];
   }
 
   float acc_norm_sq = 0.0f;
@@ -304,7 +339,7 @@ bool Imu::update(float dt_s)
   for (int i = 0; i < 3; ++i) {
     if (!std::isfinite(acc[i]) ||
         !std::isfinite(gyro[i])) {
-      state_ = ImuState::Fault;
+      setFault(ImuFaultReason::NonFiniteSensorData);
       return false;
     }
 
@@ -314,14 +349,8 @@ bool Imu::update(float dt_s)
   // 排除全零或无效加速度。
   if (!std::isfinite(acc_norm_sq) ||
       acc_norm_sq < 0.000001f) {
-    state_ = ImuState::Fault;
+    setFault(ImuFaultReason::InvalidAcceleration);
     return false;
-  }
-
-  // 保存本次原始读数
-  for (int i = 0; i < 3; ++i) {
-    acc_[i] = acc[i];
-    gyro_raw_[i] = gyro[i];
   }
 
   // 静止采样，估计陀螺仪零漂。
@@ -438,7 +467,7 @@ bool Imu::update(float dt_s)
   }
 
   if (!std::isfinite(gyro_norm_sq)) {
-    state_ = ImuState::Fault;
+    setFault(ImuFaultReason::NonFiniteCorrectedGyro);
     return false;
   }
 
@@ -466,7 +495,7 @@ bool Imu::update(float dt_s)
     };
 
     if (!NormalizeQuaternion(initial_q)) {
-      state_ = ImuState::Fault;
+      setFault(ImuFaultReason::InitialQuaternion);
       return false;
     }
 
@@ -487,7 +516,7 @@ bool Imu::update(float dt_s)
   mahony_.getQuat(q);
 
   if (!NormalizeQuaternion(q)) {
-    state_ = ImuState::Fault;
+    setFault(ImuFaultReason::AttitudeQuaternion);
     return false;
   }
 
@@ -560,7 +589,7 @@ bool Imu::update(float dt_s)
       relative_q);
 
   if (!NormalizeQuaternion(relative_q)) {
-    state_ = ImuState::Fault;
+    setFault(ImuFaultReason::RelativeQuaternion);
     return false;
   }
 
@@ -569,7 +598,7 @@ bool Imu::update(float dt_s)
 
   for (int i = 0; i < 3; ++i) {
     if (!std::isfinite(euler[i])) {
-      state_ = ImuState::Fault;
+      setFault(ImuFaultReason::InvalidEuler);
       return false;
     }
   }

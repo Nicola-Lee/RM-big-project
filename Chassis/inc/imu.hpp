@@ -65,6 +65,16 @@ enum class ImuState : uint8_t {
 };
 
 // 初始配置，后续结合实机验证
+// 仅记录首次故障原因；不会放宽任何校准/时序/输出保护。
+enum class ImuFaultReason : uint8_t {
+  None=0, InvalidConfiguration=1, SensorInitialization=2,
+  CalibrationTimeout=3, ConvergenceTimeout=4, DataTimeout=5,
+  InvalidDt=6, SensorRead=7, NonFiniteSensorData=8, InvalidAcceleration=9,
+  NonFiniteCorrectedGyro=10, InitialQuaternion=11, AttitudeQuaternion=12,
+  RelativeQuaternion=13, InvalidEuler=14,
+  TimerStopped=15, TimerConfiguration=16, SamplingGap=17
+};
+
 struct ImuParams {
   float sample_frequency_hz = 1000.0f;
   float mahony_kp = 0.25f;
@@ -119,6 +129,9 @@ class Imu {
   bool calibrated() const;
   bool ready() const;
   BMI088ErrState sensorError() const;
+  ImuFaultReason faultReason() const { return fault_reason_; }
+  // 仅供前台调度器报告原有定时器/采样间隔异常。
+  void reportTimingFault(ImuFaultReason reason);
 
   // 为控制任务提供一致的数据副本
   bool getSnapshot(ImuSnapshot &snapshot) const;
@@ -129,6 +142,7 @@ class Imu {
   float yaw() const;
 
  private:
+  void setFault(ImuFaultReason reason);
   BMI088 sensor_;
   hello_world::ahrs::Mahony mahony_;
   ImuParams params_{};
@@ -136,6 +150,10 @@ class Imu {
   ImuState state_ = ImuState::Uninitialized;
   BMI088ErrState sensor_error_ = kBMI088ErrStateNoErr;
   bool calibrated_ = false;
+  ImuFaultReason fault_reason_ = ImuFaultReason::None;
+  ImuState fault_from_state_ = ImuState::Uninitialized;
+  uint32_t fault_ms_ = 0;
+  float last_dt_s_ = 0.0f;
 
   // 零漂结果和统计状态
   float acc_[3] = {0.0f, 0.0f, 0.0f};

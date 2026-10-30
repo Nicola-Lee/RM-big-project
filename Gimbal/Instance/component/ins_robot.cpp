@@ -2,7 +2,7 @@
  * @Author: Nicola Lee nlee15428@gmail.com
  * @Date: 2026-10-07 13:04:26
  * @LastEditors: Nicola Lee nlee15428@gmail.com
- * @LastEditTime: 2026-10-29 19:59:03
+ * @LastEditTime: 2026-10-30 23:19:36
  * @FilePath: \omni_skeleton\Gimbal\Instance\component\ins_robot.cpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -70,7 +70,7 @@ robot::Gimbal *GetGimbal() {
     robot::GimbalParams params;
     // pitch 下俯为正
     // 暂定pitch轴俯仰角为30°，保留false还未确认
-    params.pitch_limits_calibrated = false;
+    params.pitch_limits_calibrated = true;
     params.pitch_min_rad = -0.5235988f;
     params.pitch_max_rad = +0.5235988f;
     // 目标变化率（rad/s）和模块转矩上限（N*m），0 表示待配置。

@@ -2,7 +2,7 @@
  * @Author: Nicola Lee nlee15428@gmail.com
  * @Date: 2026-10-07 13:04:26
  * @LastEditors: Nicola Lee nlee15428@gmail.com
- * @LastEditTime: 2026-10-29 20:06:55
+ * @LastEditTime: 2026-10-30 23:12:51
  * @FilePath: \omni_skeleton\Chassis\Instance\component\ins_robot.cpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -57,13 +57,14 @@ robot::Chassis *GetChassis() {
   static robot::Chassis chassis;
   static const bool initialized = []() {
     robot::ChassisParams params;
-    // 实车 X 型麦轮尺寸；轮速上限需调试后填写，0 表示尚未配置。
+    // 实车四角全向轮：轮轴沿中心至轮心方向，主滚动方向为切向。
+    // 用户已确认以下轮半径、前后/左右轮心距；轮速上限单位rad/s。
     params.wheel_radius_m = 0.07786f;
     params.half_length_m = 0.15338f;
     params.half_width_m = 0.15338f;
     params.max_wheel_speed_rad_s = 10.0f;
     // 前馈先保持关闭
-    params.velocity_feedforward_gain = {0.0f, 0.0f, 0.0f, 0.0f};
+    params.velocity_feedforward_gain = {45.0f, 45.0f, 45.0f, 45.0f};
     robot::Chassis::Motors motors{};
     robot::Chassis::Pids pids{};
     for (int i = 0; i < 4; ++i) {

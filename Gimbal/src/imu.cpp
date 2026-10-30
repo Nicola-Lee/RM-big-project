@@ -191,6 +191,11 @@ bool Imu::start()
     return false;
   }
 
+  // Bosch BMI08x设计指南：加速度计由挂起进入正常模式后等待50ms。
+  // start()仅由前台调用；Configured状态下保持输出禁止，TIM6仍正常运行。
+  // ImuPoll在start()返回后重新记录采样时间，因此不会把此等待计入首帧dt。
+  HAL_Delay(50);
+
   state_ = ImuState::Calibrating;
   restartCalibration();
 

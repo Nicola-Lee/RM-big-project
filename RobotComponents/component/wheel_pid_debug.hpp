@@ -3,6 +3,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cmath>
 #include "robot_control.hpp"
 
 namespace robot::wheel_debug {
@@ -10,18 +11,40 @@ namespace robot::wheel_debug {
 inline constexpr bool kWheelPidDebugEnabled = false;
 // 仅指定实验输入，PID、前馈及各级限幅仍取原来的底盘配置。
 inline constexpr uint8_t kMotorId = 1;          // 左前1、左后2、右后3、右前4
-inline constexpr float kTargetRadS = 1.0f;     // 轮子输出轴 rad/s，可为负
-inline constexpr uint32_t kDurationMs = 3000;
+enum class Waveform:uint8_t {Constant,Sine};
+inline constexpr Waveform kWaveform = Waveform::Sine;
+inline constexpr float kTargetRadS = 1.0f;     // Constant模式的轮子输出轴目标 rad/s
+inline constexpr float kSineAmplitudeRadS = 5.0f;
+inline constexpr float kSineFrequencyHz = 0.1f; // 周期10秒
+inline constexpr float kSineOffsetRadS = 0.0f;
+inline constexpr float kSinePhaseRad = 0.0f;
+inline constexpr uint32_t kDurationMs = 30000;
 inline constexpr uint32_t kPrepareMs = 100;
 inline constexpr uint32_t kFreshMs = 100;
 inline constexpr uint32_t kTransmitMs = 10;
 inline constexpr float kNeutralThreshold = 0.05f;
 inline constexpr uint32_t kCommandId = 0x213;  // 云台 -> 底盘
 inline constexpr uint32_t kReplyId = 0x214;    // 底盘 -> 云台
-inline constexpr uint32_t kProtocolVersion = 1;
+inline constexpr uint32_t kProtocolVersion = 2;
 static_assert(kMotorId >= 1 && kMotorId <= 4);
+static_assert(kWaveform==Waveform::Constant||kWaveform==Waveform::Sine);
 static_assert(control::Finite(kTargetRadS));
+static_assert(control::Finite(kSineAmplitudeRadS)&&kSineAmplitudeRadS>=0.0f);
+static_assert(control::Finite(kSineFrequencyHz)&&kSineFrequencyHz>0.0f);
+static_assert(control::Finite(kSineOffsetRadS)&&control::Finite(kSinePhaseRad));
+static_assert(control::Finite(kSineOffsetRadS+kSineAmplitudeRadS)&&
+              control::Finite(kSineOffsetRadS-kSineAmplitudeRadS));
 static_assert(kDurationMs > 0 && kDurationMs <= 30000);
+
+// 从本次实验启动时刻计时；未限幅目标仍由原Chassis/PID/电机执行限制。
+constexpr float TargetRadS(uint32_t elapsed_ms) {
+  if(elapsed_ms>=kDurationMs)return 0.0f;
+  if constexpr(kWaveform==Waveform::Constant)return kTargetRadS;
+  constexpr float kTwoPi=6.2831853071795864769f;
+  const float t_s=static_cast<float>(elapsed_ms)*0.001f;
+  return kSineOffsetRadS+kSineAmplitudeRadS*
+      std::sin(kTwoPi*kSineFrequencyHz*t_s+kSinePhaseRad);
+}
 
 // 验证两板使用同一实验输入及协议；PID/前馈/限幅只有底盘原配置这一份。
 constexpr uint32_t HashWord(uint32_t h, uint32_t v) {
@@ -30,7 +53,10 @@ constexpr uint32_t HashWord(uint32_t h, uint32_t v) {
 }
 constexpr uint32_t ConfigTag() {
   uint32_t h=HashWord(2166136261u,kProtocolVersion);
-  for (uint32_t v : {uint32_t(kMotorId), std::bit_cast<uint32_t>(kTargetRadS),
+  for (uint32_t v : {uint32_t(kMotorId),uint32_t(kWaveform),
+       std::bit_cast<uint32_t>(kTargetRadS),std::bit_cast<uint32_t>(kSineAmplitudeRadS),
+       std::bit_cast<uint32_t>(kSineFrequencyHz),std::bit_cast<uint32_t>(kSineOffsetRadS),
+       std::bit_cast<uint32_t>(kSinePhaseRad),
        kDurationMs,kPrepareMs,kFreshMs,kTransmitMs,std::bit_cast<uint32_t>(kNeutralThreshold)})
     h=HashWord(h,v);
   return h;
@@ -147,7 +173,7 @@ struct Snapshot {
   uint8_t motor_id=kMotorId,session=0;
   State state=State::Waiting;
   Reason reason=Reason::PreparationRequired;
-  float target_rad_s=0,actual_rad_s=0,error_rad_s=0;
+  float requested_rad_s=0,target_rad_s=0,actual_rad_s=0,error_rad_s=0;
   float feedforward=0,pid_output=0,raw_current=0; // pid_output 含前馈及PID总限幅
   bool speed_limited=false,output_limited=false,feedback_valid=false;
 };

@@ -25,6 +25,7 @@
 #include "robot.hpp"
 #include "runtime_monitor.hpp"
 #include "wheel_pid_debug.hpp"
+#include "remote_control_forward.hpp"
 #include <cstdint>
 #include "ins_comm.hpp"
 #include "usart.h"
@@ -50,6 +51,32 @@ static uint32_t remote_last_retry_ms = 0;//上次尝试重新启动接收的时�
 static volatile uint32_t remote_uart_error_count = 0;//调试参数：错误次数
 static volatile uint32_t remote_last_uart_error = HAL_UART_ERROR_NONE;//最近一次错误码
 
+namespace {
+robot::remote_forward::Receiver forwarded_remote;
+}
+// Ozone简单全局观察名；local UART接收状态与CAN遥控在线状态分开。
+volatile bool remote_forward_online=false;
+volatile bool remote_forward_emergency=true;
+volatile uint32_t remote_forward_rejected=0;
+
+void ReceiveForwardedRemote(uint32_t id,const uint8_t data[8]){
+  if constexpr(!robot::remote_forward::kReceiverOnChassis)return;
+  if(!comm_initialized)return;
+  const uint32_t saved=__get_PRIMASK();__disable_irq();
+  robot::remote_forward::CanFrame packet{};
+  for(unsigned i=0;i<8;++i)packet[i]=data[i];
+  const auto result=forwarded_remote.accept(id,packet,hello_world::tick::GetTickMs());
+  if(result==robot::remote_forward::Result::Complete){
+    GetRemoteControl()->decode(forwarded_remote.frame.data());
+    remote_last_valid_rx_ms=forwarded_remote.valid_ms;
+    remote_valid_frame_count=remote_valid_frame_count+1;
+    remote_has_valid_frame=true;
+  }else if(result==robot::remote_forward::Result::Stopped||result==robot::remote_forward::Result::Invalid){
+    remote_has_valid_frame=false;
+  }
+  __set_PRIMASK(saved);
+}
+
 bool GetRemoteControlSnapshot(RemoteControlSnapshot &snapshot)
 {
   // 默认离线，所有控制量为零
@@ -64,10 +91,16 @@ bool GetRemoteControlSnapshot(RemoteControlSnapshot &snapshot)
   result.last_valid_rx_ms = remote_last_valid_rx_ms;
   result.valid_frame_count = remote_valid_frame_count;
 
-  // 必须已初始化、接收已启动、收到过有效帧，而且没有超时
+  // 只选择一个物理输入来源；转发来源不依赖本地USART3的DMA状态。
+  remote_forward_online=forwarded_remote.fresh(now);
+  remote_forward_emergency=forwarded_remote.urgent_stop;
+  remote_forward_rejected=forwarded_remote.rejected;
+  const bool input_ready=robot::remote_forward::kReceiverOnChassis
+      ? forwarded_remote.fresh(now)
+      : (remote_rx_started&&huart3.RxState==HAL_UART_STATE_BUSY_RX);
+  // 必须有完整、新鲜的有效帧；部分分帧不能刷新有效期。
   if (comm_initialized &&
-      remote_rx_started &&
-      huart3.RxState == HAL_UART_STATE_BUSY_RX &&
+      input_ready &&
       remote_has_valid_frame &&
       static_cast<uint32_t>(now - result.last_valid_rx_ms) <
           kRemoteOfflineTimeoutMs) {
@@ -86,6 +119,8 @@ bool GetRemoteControlSnapshot(RemoteControlSnapshot &snapshot)
     result.rc_r_switch =
         static_cast<uint8_t>(remote->rc_r_switch());
 
+    if(robot::remote_forward::kReceiverOnChassis&&forwarded_remote.urgent_stop)
+      result.rc_r_switch=2; // 下档分帧到达即可收紧；完整新帧才允许解除。
     result.online = true;
   }
 
@@ -98,7 +133,7 @@ bool GetRemoteControlSnapshot(RemoteControlSnapshot &snapshot)
 
 extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-  if (huart != &huart3) {
+  if (robot::remote_forward::kReceiverOnChassis || huart != &huart3) {
     return;
   }
 
@@ -116,6 +151,7 @@ extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 // 只能从主循环调用
 void RemoteControlRxPoll(void)
 {
+  if constexpr(robot::remote_forward::kReceiverOnChassis)return;
   if (!comm_initialized) {
     return;
   }
@@ -311,6 +347,7 @@ void CommTaskInit(void) {
   remote_uart_error_count = 0;
   remote_last_uart_error = HAL_UART_ERROR_NONE;
 
+  if constexpr(!robot::remote_forward::kReceiverOnChassis){
   HAL_StatusTypeDef rx_status = HAL_UARTEx_ReceiveToIdle_DMA(
       &huart3,
       remote_rx_buffer,
@@ -326,6 +363,7 @@ void CommTaskInit(void) {
       huart3.RxState == HAL_UART_STATE_BUSY_RX);
 
   __set_PRIMASK(saved_primask);
+  }
 
   const uint32_t tx_error_notifications=CAN_IT_TX_MAILBOX_EMPTY|CAN_IT_BUSOFF|
       CAN_IT_ERROR_WARNING|CAN_IT_ERROR_PASSIVE|CAN_IT_ERROR;
@@ -379,48 +417,11 @@ void CommTask(void) {
  */
 // 处理 DMA 缓冲区中的新增数据
 
-static bool IsRemoteFrameValid(const uint8_t *data)//字段合理性检查
+static bool IsRemoteFrameValid(const uint8_t *data)
 {
-  //取出四个摇杆通道和一个拨轮通道的原始值
-  const uint16_t channels[5] = {
-      static_cast<uint16_t>(
-          (data[0] | (data[1] << 8)) & 0x07FF),
-
-      static_cast<uint16_t>(
-          ((data[1] >> 3) | (data[2] << 5)) & 0x07FF),
-
-      static_cast<uint16_t>(
-          ((data[2] >> 6) | (data[3] << 2) |
-           (data[4] << 10)) & 0x07FF),
-
-      static_cast<uint16_t>(
-          ((data[4] >> 1) | (data[5] << 7)) & 0x07FF),
-
-      static_cast<uint16_t>(
-          data[16] | (data[17] << 8))
-  };
-
-  //按现有解码器的 1024 ± 660 检查名义通道范围
-  for (uint16_t channel : channels) {
-    if (channel < 364 || channel > 1684) {
-      return false;
-    }
-  }
-
-  //两个拨杆的合法值为 1、2、3，不能为 0
-  const uint8_t left_switch = (data[5] >> 6) & 0x03;
-  const uint8_t right_switch = (data[5] >> 4) & 0x03;
-
-  if (left_switch == 0 || right_switch == 0) {
-    return false;
-  }
-
-  //鼠标按键字段只能为 0 或 1
-  if (data[12] > 1 || data[13] > 1) {
-    return false;
-  }
-
-  return true;
+  robot::remote_forward::Frame frame{};
+  for(unsigned i=0;i<frame.size();++i)frame[i]=data[i];
+  return robot::remote_forward::Valid(frame);
 }
 
 static void ProcessRemoteRxByte(uint8_t byte)
@@ -494,7 +495,7 @@ static void ProcessRemoteRxPosition(uint16_t position, bool idle_event)
 extern "C" void HAL_UARTEx_RxEventCallback(
     UART_HandleTypeDef *huart, uint16_t Size)
 {
-  if (huart != &huart3 || !remote_rx_started) {
+  if (robot::remote_forward::kReceiverOnChassis || huart != &huart3 || !remote_rx_started) {
     return;
   }
 

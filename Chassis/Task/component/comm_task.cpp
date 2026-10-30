@@ -34,6 +34,7 @@
 #include "robot.hpp"
 #include "runtime_monitor.hpp"
 #include "wheel_pid_debug.hpp"
+#include "remote_probe.hpp"
 #include <cmath>
 /* Exported function definitions ---------------------------------------------*/
 static volatile bool comm_initialized = false;
@@ -133,13 +134,16 @@ void CommTaskInit(void) {
     Error_Handler();
   }
   comm_initialized = true;
-  // 本板遥控操作来自云台速度帧，不启动第二套DBUS接收。
+  // 实车遥控器接本板USART3，接收后转发原始帧给云台；不直接生成运动许可。
+  remote_probe::Init();
+  // 正常/调试固件均接收转发；整车运动指令仍由云台通过速度帧下发。
 }
 
 void CommTask(void) {
   using namespace robot::runtime;
   if(!comm_initialized){SetFatal(Fatal::MissingObject);return;}
   ServiceCan();
+  remote_probe::Forward();
   if constexpr(robot::wheel_debug::kWheelPidDebugEnabled){
     robot::wheel_debug::Communicate();
     Mark(Task::Communication);

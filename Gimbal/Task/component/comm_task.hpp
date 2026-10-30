@@ -58,6 +58,8 @@ struct RemoteControlSnapshot {
 
 //返回true表示在线 false表示当前数据不能用于控制
 bool GetRemoteControlSnapshot(RemoteControlSnapshot &snapshot);
+// CAN1 0x215~0x217，完整重组后交给原DT7解码器。
+void ReceiveForwardedRemote(uint32_t id,const uint8_t data[8]);
 
 // 第9项Robot本地计算云台目标角；这里仅发布底盘速度和云台状态。
 bool PublishGimbalBoardState(const robot::GimbalChassisComm::GimbalData &state);

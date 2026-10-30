@@ -99,7 +99,9 @@ class Chassis {
       if (!IsFinite(gain) || gain < 0.0f) return false;
     return true;
   }
-  // X 型 45 度麦轮。正轮速表示该轮推动车体向前；电机 dir 需实机标定。
+  // 四角径向轮轴的全向轮：轮轴沿底盘中心到轮心，主滚动方向与轮轴垂直。
+  // 四轮正滚动方向均取带有+X分量的切向；电机dir负责对应实车正转方向。
+  // 轮序 LF(+a,+b)、LB(-a,+b)、RB(-a,-b)、RF(+a,-b)。
   // 纯计算接口：不访问电机/PID，可用于静态检查或离线观察。
   static constexpr bool SolveBody(const ChassisFrameVelocity &body,
                                   const ChassisParams &p,
@@ -110,11 +112,20 @@ class Chassis {
       return false;
     // double 中间量避免有限 float 输入在求和/除半径时溢出。
     const double vx = body.vx, vy = body.vy;
-    const double turn = (static_cast<double>(p.half_length_m) + p.half_width_m) * body.w;
+    const double a = p.half_length_m, b = p.half_width_m;
+    const double radius_sq = a * a + b * b;
+    // 求轮心到中心距离d；a+b与sqrt(a^2+b^2)之比在[1,sqrt(2)]。
+    // 固定8次Newton迭代在该范围收敛至double精度，兼容C++20 constexpr。
+    double d = a + b;
+    for (unsigned i = 0; i < 8; ++i) d = 0.5 * (d + radius_sq / d);
+    // 单位切向为(b/d, +/-a/d)。将轮心速度(vx-w*y,vy+w*x)投影至切向。
+    // 正方形底盘的两个平移系数均为1/sqrt(2)，转动系数为轮心半径d。
+    const double forward = (b / d) * vx, left = (a / d) * vy;
+    const double turn = d * body.w;
     const double r = p.wheel_radius_m;
     const std::array<double, 4> wheels{
-        (vx - vy - turn) / r, (vx + vy - turn) / r,
-        (vx - vy + turn) / r, (vx + vy + turn) / r};
+        (forward - left - turn) / r, (forward + left - turn) / r,
+        (forward - left + turn) / r, (forward + left + turn) / r};
     double peak = 0.0;
     for (double wheel : wheels) {
       const double magnitude = wheel < 0.0 ? -wheel : wheel;

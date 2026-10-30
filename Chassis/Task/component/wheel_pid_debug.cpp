@@ -8,7 +8,7 @@
 
 namespace robot::wheel_debug {
 Snapshot g_wheel_debug_snapshot{};
-// 每5ms取样，640个槽位覆盖默认3秒；长实验循环覆盖，不阻塞1ms任务。
+// 每5ms取样，640个槽位保留最近约3.2秒；30秒实验循环覆盖，不阻塞1ms任务。
 std::array<Snapshot,kWheelPidDebugEnabled?640:1> g_wheel_debug_trace{};
 uint32_t g_wheel_debug_trace_count=0,g_wheel_debug_trace_head=0;
 namespace {
@@ -19,6 +19,7 @@ Timing timing;
 Chassis *chassis=nullptr;
 bool initialized=false;
 uint32_t last_sample_ms=0;
+float requested_rad_s=0.0f; // 最近一次Update送入原单轮接口的目标
 constexpr unsigned index=kMotorId-1;
 
 bool Healthy(WheelFeedbackSnapshot &feedback,Reason &reason){
@@ -31,6 +32,7 @@ bool Healthy(WheelFeedbackSnapshot &feedback,Reason &reason){
   reason=Reason::None;return true;
 }
 void Stop(){
+  requested_rad_s=0.0f;
   runtime::SetControlPermit(false);
   if(chassis!=nullptr)chassis->stop();
 }
@@ -39,14 +41,14 @@ void Observe(uint32_t now,const WheelFeedbackSnapshot &feedback,bool terminal){
   s.now_ms=now;s.state=gate.state;s.reason=gate.reason;s.session=gate.session;
   s.elapsed_ms=gate.state==State::Running||terminal?uint32_t(now-gate.started_ms):s.elapsed_ms;
   s.feedback_valid=feedback.valid[index];s.actual_rad_s=feedback.velocity[index];
-  s.target_rad_s=0;s.feedforward=0;s.pid_output=0;s.raw_current=0;
+  s.requested_rad_s=0;s.target_rad_s=0;s.feedforward=0;s.pid_output=0;s.raw_current=0;
   s.speed_limited=false;s.output_limited=false;
   if(gate.state==State::Running){
     const auto &r=chassis->result();
-    s.target_rad_s=r.wheel_target_rad_s[index];
+    s.requested_rad_s=requested_rad_s;s.target_rad_s=r.wheel_target_rad_s[index];
     s.feedforward=chassis->wheelFeedforward(index)*s.target_rad_s;
     s.pid_output=GetPidMotorWheel(index)->output();s.raw_current=r.raw_current[index];
-    s.speed_limited=s.target_rad_s!=kTargetRadS;
+    s.speed_limited=s.target_rad_s!=s.requested_rad_s;
     s.output_limited=std::fabs(s.pid_output)>=GetPidMotorWheel(index)->outputLimit()||s.raw_current!=s.pid_output;
   }
   s.error_rad_s=s.target_rad_s-s.actual_rad_s;
@@ -84,7 +86,8 @@ void Update(){
     if(previous!=State::Running){
       chassis->stop();g_wheel_debug_trace_count=0;g_wheel_debug_trace_head=0;
     }
-    if(!chassis->updateSingleWheel(index,kTargetRadS,feedback.valid[index],0.001f))gate.fault(Reason::Control);
+    requested_rad_s=TargetRadS(uint32_t(now-gate.started_ms));
+    if(!chassis->updateSingleWheel(index,requested_rad_s,feedback.valid[index],0.001f))gate.fault(Reason::Control);
   }
   if(gate.state!=State::Running)Stop();
   Observe(now,feedback,previous==State::Running&&gate.state!=State::Running);

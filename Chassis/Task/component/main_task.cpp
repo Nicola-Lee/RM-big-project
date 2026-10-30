@@ -23,6 +23,7 @@
 #include "imu.hpp"
 #include "runtime_monitor.hpp"
 #include "wheel_pid_debug.hpp"
+#include "remote_probe.hpp"
 #include <cstdint>
 
 
@@ -86,7 +87,7 @@ void ImuPoll(void) {
       (htim6.Instance->DIER & TIM_DIER_UIE) != 0;
   if (!timers_running) {
     if (imu_sampling_started) {
-      imu->update(0.0f);  // 非法dt使现有Imu进入Fault，不进行SPI读取
+      imu->reportTimingFault(hello_world::imu::ImuFaultReason::TimerStopped);
       imu_poll_status = kImuPollFault;
     } else {
       imu_poll_status = kImuPollWaitingForTimer;
@@ -128,10 +129,12 @@ void ImuPoll(void) {
   // 采样期间不允许更改TIM2分频/周期；停顿超过20ms不能伪装成短采样间隔。
   // 毫秒检查同时避免TIM2停顿多圈后的模运算把长间隔误判成短间隔。
   const uint32_t now_ms = HAL_GetTick();
-  if (htim2.Instance->ARR != 0xFFFFFFFFu ||
-      htim2.Instance->PSC != imu_timer_prescaler ||
-      static_cast<uint32_t>(now_ms - imu_last_ms) > 20u) {
-    imu->update(0.0f);
+  const bool timer_changed = htim2.Instance->ARR != 0xFFFFFFFFu ||
+      htim2.Instance->PSC != imu_timer_prescaler;
+  if (timer_changed || static_cast<uint32_t>(now_ms - imu_last_ms) > 20u) {
+    imu->reportTimingFault(timer_changed
+        ? hello_world::imu::ImuFaultReason::TimerConfiguration
+        : hello_world::imu::ImuFaultReason::SamplingGap);
     imu_poll_status = kImuPollFault;
     return;
   }
@@ -207,6 +210,7 @@ void MainTask(void) {
 }
 
 void WatchdogPoll(void) {
+  remote_probe::Poll();
   using State=hello_world::imu::ImuState;
   const auto state=imu_instance==nullptr?State::Uninitialized:imu_instance->state();
   const bool sampling=state==State::Calibrating||state==State::Converging||state==State::Ready;
