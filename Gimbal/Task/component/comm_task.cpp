@@ -24,6 +24,7 @@
 #include "ins_robot.hpp"
 #include "robot.hpp"
 #include "runtime_monitor.hpp"
+#include "wheel_pid_debug.hpp"
 #include <cstdint>
 #include "ins_comm.hpp"
 #include "usart.h"
@@ -339,6 +340,11 @@ void CommTask(void) {
   using namespace robot::runtime;
   if(!comm_initialized){SetFatal(Fatal::MissingObject);return;}
   ServiceCan();
+  if constexpr(robot::wheel_debug::kWheelPidDebugEnabled){
+    robot::wheel_debug::Communicate();
+    Mark(Task::Communication);
+    return;
+  }
   auto *yaw=static_cast<hello_world::motor::DM_J4310 *>(GetMotorYaw());
   auto *pitch=static_cast<hello_world::motor::DM_J4310 *>(GetMotorPitch());
   auto *controller=GetRobot();

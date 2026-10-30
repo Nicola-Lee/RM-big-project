@@ -22,6 +22,7 @@
 #include "ins_imu.hpp"
 #include "imu.hpp"
 #include "runtime_monitor.hpp"
+#include "wheel_pid_debug.hpp"
 #include <cstdint>
 
 
@@ -157,6 +158,12 @@ void MainTaskInit(void) {
   if (imu_poll_initialized) return;
   robot::runtime::Initialize();
   imu_instance = GetImu();
+  if constexpr(robot::wheel_debug::kWheelPidDebugEnabled){
+    robot::wheel_debug::Initialize();
+    CommTaskInit();
+    imu_poll_initialized=true;
+    return;
+  }
   /* TODO【新人任务】:
    * 一次性初始化（由 main() 在 while(1) 之前调用一次）：
    *   1. 通过 Instance 层的 GetXxx() 拿到电机 / IMU / 遥控器 / 双板通讯 / Robot 等对象，
@@ -186,6 +193,11 @@ void MainTaskInit(void) {
 }
 
 void MainTask(void) {
+  if constexpr(robot::wheel_debug::kWheelPidDebugEnabled){
+    robot::wheel_debug::Update();
+    robot::runtime::Mark(robot::runtime::Task::Control);
+    return;
+  }
   // 原TIM6的1ms入口。IMU阻塞采样继续在主循环，控制只读取快照。
   auto *controller=GetRobot();
   if(controller==nullptr){robot::runtime::SetFatal(robot::runtime::Fatal::MissingObject);return;}

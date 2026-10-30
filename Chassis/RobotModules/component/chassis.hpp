@@ -66,6 +66,13 @@ class Chassis {
   // 无效输入/失能：四轮零电流，清除目标、前馈结果及 PID 历史，返回 false。
   bool update(const ChassisControlInput &input);
   void stop();
+  // 调试入口仅替换目标轮速来源，复用下面的同一套PID/前馈/电流写入路径。
+  bool singleWheelReady(unsigned index) const;
+  bool updateSingleWheel(unsigned index,float target_rad_s,bool feedback_valid,float dt_s);
+  float wheelSpeedLimit() const { return params_.max_wheel_speed_rad_s; }
+  float wheelFeedforward(unsigned index) const {
+    return index<4?params_.velocity_feedforward_gain[index]:0.0f;
+  }
   const ChassisResult &result() const { return result_; }
   bool configured() const { return configured_; }
   bool controlReady() const;
@@ -125,6 +132,8 @@ class Chassis {
     return true;
   }
  private:
+  bool applyWheelTargets(ChassisResult next,const WheelValues &feedback,
+                         const std::array<bool,4> &selected,float dt_s);
   ChassisParams params_{};
   Motors motors_{};
   Pids pids_{};

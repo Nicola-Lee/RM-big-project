@@ -33,6 +33,7 @@
 #include "ins_robot.hpp"
 #include "robot.hpp"
 #include "runtime_monitor.hpp"
+#include "wheel_pid_debug.hpp"
 #include <cmath>
 /* Exported function definitions ---------------------------------------------*/
 static volatile bool comm_initialized = false;
@@ -139,6 +140,11 @@ void CommTask(void) {
   using namespace robot::runtime;
   if(!comm_initialized){SetFatal(Fatal::MissingObject);return;}
   ServiceCan();
+  if constexpr(robot::wheel_debug::kWheelPidDebugEnabled){
+    robot::wheel_debug::Communicate();
+    Mark(Task::Communication);
+    return;
+  }
   TransmitBoardStatus();
   auto *controller=GetRobot();
   if(controller==nullptr){SetControlPermit(false);SetFatal(Fatal::MissingObject);return;}

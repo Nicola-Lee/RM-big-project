@@ -26,6 +26,7 @@
 #include "gimbal_chassis_comm.hpp"
 #include "comm_task.hpp"
 #include "runtime_monitor.hpp"
+#include "wheel_pid_debug.hpp"
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
 static CAN_RxHeaderTypeDef rx_header2;
@@ -97,6 +98,9 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
     if (rx_header1.IDE == CAN_ID_STD &&
       rx_header1.RTR == CAN_RTR_DATA &&
       rx_header1.DLC == 8) {
+      if constexpr(robot::wheel_debug::kWheelPidDebugEnabled){
+        robot::wheel_debug::Receive(rx_header1.StdId,can1_rx_data);
+      }
 
       // 云台和底盘的通信帧
       if (rx_header1.StdId == robot::board_protocol::kGimbalStatusId ||
