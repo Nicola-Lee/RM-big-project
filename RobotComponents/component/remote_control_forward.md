@@ -6,7 +6,7 @@
 因此当前硬件配置使用：接收机 → 底盘 USART3 循环 DMA → CAN1 三片转发 → 云台原 DT7 解码器 → 原控制/调试入口。
 云台仍计算 yaw/pitch 目标角和云台坐标系速度，再通过原双板协议向底盘发送速度。底盘接收遥控本身不授予电机运行许可。
 
-共享开关在 `remote_control_forward.hpp` 的 `kReceiverOnChassis = true`。它描述接收机物理位置，与 `wheel_pid_debug.hpp` 的调试开关独立；两板必须使用相同版本、相同配置重新编译和烧录。
+物理来源配置在 `remote_control_forward.hpp` 的 `kReceiverOnChassis = true`，与 `wheel_pid_debug.hpp` 的调试开关独立。云台本地UART遥控分支已删除，编译期检查此配置必须为true。修改双板协议或共享实验配置时，两板需要使用匹配的固件；仅本次云台冗余接收清理只需更新云台固件。
 
 ## 接收与转发逻辑
 
@@ -24,7 +24,8 @@
 - 年龄以 8ms 为单位向上取整，结合拼帧耗时检查 100ms 新鲜度；这是接收时效检查，实际停车延迟还包含 UART 和 CAN 传输/排队及原许可链的响应。
 - 缺片、错片、重复片不刷新有效时间；错误版本、非法帧、离线声明使输入失效。
 - 每片都有右拨杆下档标志，可先收紧急停；解除需要一组新的完整有效帧。离线声明之后，相同或更旧的滞留分片不能立即恢复输入。
-- 只有选中的物理来源能改变遥控输入；当前云台不启动本地 USART3 遥控 DMA。原 UART 恢复代码保留供日后改变物理配置使用。
+- 云台只通过CAN1转发接收遥控数据。已删除云台本地UART遥控DMA缓冲、拼帧、启动/恢复及应用层UART回调。Cube生成的串口初始化、DMA/IRQ和驱动文件保持原样。
+- `RemoteControlRxPoll()`仅保留为空兼容入口，因为Cube生成的main.c仍调用它；此入口不启动、停止或重试任何接收。
 - 原 `0x210～0x214` 协议、遥控映射、PID、前馈、限幅、轮向、正常状态机及单轮调试握手保持原实现。本次不修改 Cube 生成文件或受保护头文件。
 
 ## Ozone 检查顺序
@@ -46,10 +47,10 @@
 - `remote_forward_rejected`：正常应不持续增长。
 - `(g_wheel_debug_snapshot).state`、`.reason`：观察原单轮调试握手。
 
-这些在线诊断由原遥控快照接口同步刷新。云台 `remote_rx_started = 0` 现在是预期行为，不能用它判断 CAN 遥控在线。
+这些在线诊断由原遥控快照接口同步刷新。旧的云台UART变量 `remote_rx_started`、`remote_uart_error_count`、`remote_last_uart_error`已删除，请从旧Ozone观察列表中移除；使用 `remote_forward_online` 和 `remote_valid_frame_count`判断CAN遥控输入。
 若底盘转发计数增加、云台计数不变，再排查两板 CAN1 接线、终端电阻、波特率和 `runtime_monitor` 总线故障；不要继续改串口引脚。
 
-当前实验开关和 PID 参数保持用户现有值：调试开启，ID1，目标 1rad/s，运行 3000ms，ID1 kp=100、ki=kd=0。握手具备条件后，下档保持至少 100ms，等待 Armed，再上档仅启动一次。源码中 Finished/Fault 的停止原因可能在后续 Stop 周期被覆盖为等待状态，是已有诊断显示问题，不用它单独判断停车是否生效。
+实验开关和曲线参数以 `wheel_pid_debug.hpp` 为准，PID以底盘原 `ins_pid.cpp` 为准。启用单轮调试且握手具备条件后，下档保持至少100ms，等待Armed，再上档仅启动一次。源码中 Finished/Fault 的停止原因可能在后续 Stop 周期被覆盖为等待状态，是已有诊断显示问题，不用它单独判断停车是否生效。
 
 ## 本次修改位置
 
@@ -61,8 +62,13 @@
 | `Chassis/Task/component/main_task.cpp` | 原 WatchdogPoll 中调用接收恢复轮询 |
 | `Chassis/Task/component/comm_task.cpp` | 正常/调试模式均初始化接收，并在原周期调用转发 |
 | `Gimbal/Task/component/comm_task.hpp` | 声明转发接收入口 |
-| `Gimbal/Task/component/comm_task.cpp` | 重组后接原解码器/快照，当前硬件配置停用本地 UART 遥控来源 |
+| `Gimbal/Task/component/comm_task.cpp` | 保留CAN重组、原解码器/快照；删除云台本地UART遥控实现，保留空轮询兼容入口 |
 | `Gimbal/src/HW_can.cpp` | 原 CAN1 回调增加 `0x215～0x217` 分发 |
 | `RobotComponents/component/remote_control_forward.md` | 本说明与操作检查清单 |
 
 已通过两板正常/调试模式 ARM 编译链接和协议、UART 拼帧、单轮握手、运动学、原状态机、看门狗相关编译期断言。原链接器 RWX LOAD 段警告仍存在。尚未代用户烧录或验证实际转发/电机响应。
+
+## 云台冗余接收清理（2026-11-03）
+
+本次仅修改云台 `comm_task.cpp/.hpp`、云台 `ins_comm.cpp` 中的说明及本文档。底盘接收/恢复/转发、共享协议头、云台CAN分发、DT7解码器、控制状态机及PID配置保持原样。
+云台继续使用完整同序号重组、新鲜度、急停收紧和原快照接口。更改后只需重新编译、烧录云台并加载对应新ELF；无需重刷底盘。

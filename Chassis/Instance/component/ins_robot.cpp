@@ -2,7 +2,7 @@
  * @Author: Nicola Lee nlee15428@gmail.com
  * @Date: 2026-10-07 13:04:26
  * @LastEditors: Nicola Lee nlee15428@gmail.com
- * @LastEditTime: 2026-10-30 23:12:51
+ * @LastEditTime: 2026-11-03 19:07:15
  * @FilePath: \omni_skeleton\Chassis\Instance\component\ins_robot.cpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -40,14 +40,15 @@ robot::Robot *GetRobot() {
   static robot::Robot controller;
   static const bool initialized=[](){
     robot::ChassisRobotParams params;
-    // 待实机配置：分量速度m/s、角速度rad/s、加速度m/s^2和rad/s^2。
+    // 分量速度m/s、角速度rad/s、加速度m/s^2和rad/s^2限幅
     params.max_axis_speed_m_s=0.3f;
     params.max_body_rate_rad_s=robot::limits::kMaxBodyRateRadS;
     params.linear_accel_m_s2=0.3f;
     params.angular_accel_rad_s2=0.5f;
-    // 底盘跟随PID参数调节
+    // 底盘跟随PID参数
     params.follow_pid={.kp=0.0f, .ki=0.0f, .kd=0.0f,
       .integral_limit=0.1f,.output_limit=0.5f};
+
     return controller.init(params,GetChassis(),GetImu(),GetGimbalChassisComm());
   }();
   return initialized?&controller:nullptr;
@@ -57,13 +58,12 @@ robot::Chassis *GetChassis() {
   static robot::Chassis chassis;
   static const bool initialized = []() {
     robot::ChassisParams params;
-    // 实车四角全向轮：轮轴沿中心至轮心方向，主滚动方向为切向。
-    // 用户已确认以下轮半径、前后/左右轮心距；轮速上限单位rad/s。
+
     params.wheel_radius_m = 0.07786f;
     params.half_length_m = 0.15338f;
     params.half_width_m = 0.15338f;
     params.max_wheel_speed_rad_s = 10.0f;
-    // 前馈先保持关闭
+    // 前馈
     params.velocity_feedforward_gain = {45.0f, 45.0f, 45.0f, 45.0f};
     robot::Chassis::Motors motors{};
     robot::Chassis::Pids pids{};

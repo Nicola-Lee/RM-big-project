@@ -2,7 +2,7 @@
  * @Author: Nicola Lee nlee15428@gmail.com
  * @Date: 2026-10-07 13:04:26
  * @LastEditors: Nicola Lee nlee15428@gmail.com
- * @LastEditTime: 2026-10-30 23:19:36
+ * @LastEditTime: 2026-11-03 19:19:41
  * @FilePath: \omni_skeleton\Gimbal\Instance\component\ins_robot.cpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -69,16 +69,16 @@ robot::Gimbal *GetGimbal() {
   static const bool initialized = []() {
     robot::GimbalParams params;
     // pitch 下俯为正
-    // 暂定pitch轴俯仰角为30°，保留false还未确认
+    // 暂定pitch轴俯仰角为30°
     params.pitch_limits_calibrated = true;
     params.pitch_min_rad = -0.5235988f;
     params.pitch_max_rad = +0.5235988f;
-    // 目标变化率（rad/s）和模块转矩上限（N*m），0 表示待配置。
+    // 目标变化率（rad/s）和模块转矩上限（N*m）
     params.yaw_target_rate_rad_s = 1.0f;
     params.pitch_target_rate_rad_s = 0.3f;
     params.yaw_torque_limit_nm = 0.3f;
     params.pitch_torque_limit_nm = 0.3f;
-    // 前馈默认关闭；位置 PID 参数继续在 ins_pid.cpp 中分别整定。
+    // 云台轴前馈和重力补偿系数
     params.yaw_velocity_ff = 0.0f;
     params.pitch_velocity_ff = 0.0f;
     params.pitch_gravity_cos_nm = 0.0f;

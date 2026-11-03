@@ -28,39 +28,27 @@
 #include "remote_control_forward.hpp"
 #include <cstdint>
 #include "ins_comm.hpp"
-#include "usart.h"
 #include "tick.hpp"
 
 /* Exported function definitions ---------------------------------------------*/
 static volatile bool comm_initialized = false;
-static constexpr uint16_t kRemoteRxBufferSize = 128;//DMA缓存区容量
-static uint8_t remote_rx_buffer[kRemoteRxBufferSize] = {0};//数据写入
-static uint16_t remote_frame_length = 0;//目前缓存中已有几个字节
-static uint16_t remote_rx_last_pos = 0;//上次处理到的DMA缓冲区位置
-static uint8_t remote_frame_buffer[hello_world::remote_control::kRcRxDataLen] = {0};//暂存的DBUS数据
-static volatile uint32_t remote_valid_frame_count = 0;//累计的有效帧数
-static volatile uint32_t remote_last_valid_rx_ms = 0;//最近一次收到控制帧的时间
-static volatile bool remote_has_valid_frame = false;//上电后是否受到过有效帧
-static volatile bool remote_rx_started = false;//UART DMA接收是否已经启动
-static bool remote_frame_aligned = false;//是否已经对齐到DBUS帧头
-static constexpr uint32_t kRemoteOfflineTimeoutMs = 100;//遥控器离线判定阈值
-
-static constexpr uint32_t kRemoteRetryIntervalMs = 10;//恢复失败后尝试时间的间隔
-static uint32_t remote_last_retry_ms = 0;//上次尝试重新启动接收的时间
-
-static volatile uint32_t remote_uart_error_count = 0;//调试参数：错误次数
-static volatile uint32_t remote_last_uart_error = HAL_UART_ERROR_NONE;//最近一次错误码
+// 云台只消费底盘CAN转发的完整遥控帧；物理UART接收由底盘负责。
+static_assert(robot::remote_forward::kReceiverOnChassis,
+              "Gimbal remote input requires chassis CAN forwarding");
+static volatile uint32_t remote_valid_frame_count = 0;
+static volatile uint32_t remote_last_valid_rx_ms = 0;
+static volatile bool remote_has_valid_frame = false;
+static constexpr uint32_t kRemoteOfflineTimeoutMs = robot::remote_forward::kTimeoutMs;
 
 namespace {
 robot::remote_forward::Receiver forwarded_remote;
 }
-// Ozone简单全局观察名；local UART接收状态与CAN遥控在线状态分开。
+// Ozone简单全局观察名：来自底盘CAN转发的遥控状态。
 volatile bool remote_forward_online=false;
 volatile bool remote_forward_emergency=true;
 volatile uint32_t remote_forward_rejected=0;
 
 void ReceiveForwardedRemote(uint32_t id,const uint8_t data[8]){
-  if constexpr(!robot::remote_forward::kReceiverOnChassis)return;
   if(!comm_initialized)return;
   const uint32_t saved=__get_PRIMASK();__disable_irq();
   robot::remote_forward::CanFrame packet{};
@@ -91,13 +79,11 @@ bool GetRemoteControlSnapshot(RemoteControlSnapshot &snapshot)
   result.last_valid_rx_ms = remote_last_valid_rx_ms;
   result.valid_frame_count = remote_valid_frame_count;
 
-  // 只选择一个物理输入来源；转发来源不依赖本地USART3的DMA状态。
-  remote_forward_online=forwarded_remote.fresh(now);
+  // 仅使用CAN转发重组结果；不依赖云台本地UART状态。
+  const bool input_ready=forwarded_remote.fresh(now);
+  remote_forward_online=input_ready;
   remote_forward_emergency=forwarded_remote.urgent_stop;
   remote_forward_rejected=forwarded_remote.rejected;
-  const bool input_ready=robot::remote_forward::kReceiverOnChassis
-      ? forwarded_remote.fresh(now)
-      : (remote_rx_started&&huart3.RxState==HAL_UART_STATE_BUSY_RX);
   // 必须有完整、新鲜的有效帧；部分分帧不能刷新有效期。
   if (comm_initialized &&
       input_ready &&
@@ -119,7 +105,7 @@ bool GetRemoteControlSnapshot(RemoteControlSnapshot &snapshot)
     result.rc_r_switch =
         static_cast<uint8_t>(remote->rc_r_switch());
 
-    if(robot::remote_forward::kReceiverOnChassis&&forwarded_remote.urgent_stop)
+    if(forwarded_remote.urgent_stop)
       result.rc_r_switch=2; // 下档分帧到达即可收紧；完整新帧才允许解除。
     result.online = true;
   }
@@ -131,85 +117,9 @@ bool GetRemoteControlSnapshot(RemoteControlSnapshot &snapshot)
   return result.online;
 }
 
-extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-  if (robot::remote_forward::kReceiverOnChassis || huart != &huart3) {
-    return;
-  }
-
-  // 立即让读取接口返回离线
-  remote_rx_started = false;
-  remote_has_valid_frame = false;
-
-  remote_last_uart_error = huart->ErrorCode;
-  remote_uart_error_count = remote_uart_error_count + 1;
-
-  // 不在中断中阻塞重试，由主循环负责恢复
-}
-
-
-// 只能从主循环调用
-void RemoteControlRxPoll(void)
-{
-  if constexpr(robot::remote_forward::kReceiverOnChassis)return;
-  if (!comm_initialized) {
-    return;
-  }
-
-  // 正常运行时不停止、不重启 DMA
-  if (remote_rx_started &&
-      huart3.RxState == HAL_UART_STATE_BUSY_RX) {
-    return;
-  }
-
-  const uint32_t now = hello_world::tick::GetTickMs();
-
-  if (static_cast<uint32_t>(now - remote_last_retry_ms) <
-      kRemoteRetryIntervalMs) {
-    return;
-  }
-
-  remote_last_retry_ms = now;
-
-  // 恢复期间保持离线
-  uint32_t saved_primask = __get_PRIMASK();
-  __disable_irq();
-
-  remote_rx_started = false;
-  remote_has_valid_frame = false;
-
-  __set_PRIMASK(saved_primask);
-
-  // 此函数可能等待 DMA 停止，所以必须在主循环中执行
-  if (HAL_UART_AbortReceive(&huart3) != HAL_OK) {
-    return;
-  }
-
-  // 旧接收停止后，丢弃旧的拼帧状态
-  remote_rx_last_pos = 0;
-  remote_frame_length = 0;
-  remote_frame_aligned = false;
-
-  const uint32_t errors_before = remote_uart_error_count;
-
-  const HAL_StatusTypeDef status = HAL_UARTEx_ReceiveToIdle_DMA(
-      &huart3,
-      remote_rx_buffer,
-      kRemoteRxBufferSize
-  );
-
-  saved_primask = __get_PRIMASK();
-  __disable_irq();
-
-  // 防止启动期间发生的新错误被成功返回值覆盖
-  remote_rx_started =
-      (status == HAL_OK &&
-       remote_uart_error_count == errors_before &&
-       huart3.RxState == HAL_UART_STATE_BUSY_RX);
-
-  __set_PRIMASK(saved_primask);
-}
-
+// Cube生成的main.c仍调用此C接口，保留空入口以维持原主循环。
+// 云台不再执行本地遥控UART接收、重启或错误恢复。
+void RemoteControlRxPoll(void) {}
 
 namespace {
 // 所有发送统一记录入邮箱结果、忙状态和完成回调；此处不等待总线。
@@ -303,8 +213,8 @@ void CommTaskInit(void) {
   /* TODO【新人任务】:
    * 通讯层一次性初始化：
    *   1. 初始化 CAN 滤波器：inc/HW_can.hpp 的 CanFilter_Init(&hcan1) / CanFilter_Init(&hcan2)。
-   *   2. 启动遥控器串口空闲 + DMA 接收（18 字节 DBUS，见 inc/DT7.hpp 注释）：
-   *      调用 HAL_UARTEx_ReceiveToIdle_DMA 并记录接收缓冲区。
+   *   2. 创建DT7解码对象并清零CAN遥控有效状态；实际UART接收在底盘。
+   *      CAN1收到0x215～0x217后，由ReceiveForwardedRemote重组并解码。
    *   3. IWDG由main初始化、WatchdogPoll集中刷新；通信任务只记录进度。
    */
   GetMotorYaw();
@@ -334,36 +244,10 @@ void CommTaskInit(void) {
   }
 
   GetRemoteControl();
-  //初始化接收状态
-  remote_rx_last_pos = 0;
-  remote_frame_length = 0;
+  // 初始化来自底盘CAN转发的有效帧状态。
   remote_valid_frame_count = 0;
   remote_last_valid_rx_ms = 0;
   remote_has_valid_frame = false;
-  remote_rx_started = false;
-  remote_frame_aligned = false;
-
-  remote_last_retry_ms = hello_world::tick::GetTickMs();
-  remote_uart_error_count = 0;
-  remote_last_uart_error = HAL_UART_ERROR_NONE;
-
-  if constexpr(!robot::remote_forward::kReceiverOnChassis){
-  HAL_StatusTypeDef rx_status = HAL_UARTEx_ReceiveToIdle_DMA(
-      &huart3,
-      remote_rx_buffer,
-      kRemoteRxBufferSize
-  );
-
-  const uint32_t saved_primask = __get_PRIMASK();
-  __disable_irq();
-
-  remote_rx_started =
-      (rx_status == HAL_OK &&
-      remote_uart_error_count == 0 &&
-      huart3.RxState == HAL_UART_STATE_BUSY_RX);
-
-  __set_PRIMASK(saved_primask);
-  }
 
   const uint32_t tx_error_notifications=CAN_IT_TX_MAILBOX_EMPTY|CAN_IT_BUSOFF|
       CAN_IT_ERROR_WARNING|CAN_IT_ERROR_PASSIVE|CAN_IT_ERROR;
@@ -405,120 +289,4 @@ void CommTask(void) {
   }
   TransmitBoardStatusAndVelocity();
   Mark(Task::Communication);
-}
-
-/* Private function definitions ----------------------------------------------*/
-/* TODO【新人任务】:
- * 实现 UART 空闲中断回调 HAL_UARTEx_RxEventCallback：
- *   - 收到满 18 字节后调用 DT7.decode() 解包遥控器数据，并重新启动下一轮接收；
- *   - 该回调同样是 C 链接（extern "C"）。
- * 注意：CAN 的接收分发在 src/HW_can.cpp 的两个回调里（电机 decode / 双板协议解码），
- *      不要在这里重复写 CAN 接收逻辑。
- */
-// 处理 DMA 缓冲区中的新增数据
-
-static bool IsRemoteFrameValid(const uint8_t *data)
-{
-  robot::remote_forward::Frame frame{};
-  for(unsigned i=0;i<frame.size();++i)frame[i]=data[i];
-  return robot::remote_forward::Valid(frame);
-}
-
-static void ProcessRemoteRxByte(uint8_t byte)
-{
-  //尚未确定帧起点时，不接收可能错位的数据
-  if (!remote_frame_aligned) {
-    return;
-  }
-
-  //将新字节放入拼帧缓存
-  remote_frame_buffer[remote_frame_length++] = byte;
-
-  //不足 18 字节，继续等待后面的字节
-  if (remote_frame_length <
-      hello_world::remote_control::kRcRxDataLen) {
-    return;
-  }
-
-  //已经凑齐 18 字节，为下一帧复位计数
-  remote_frame_length = 0;
-
-  //异常帧不解码、不刷新有效接收时间
-  if (!IsRemoteFrameValid(remote_frame_buffer)) {
-    remote_frame_aligned = false;
-    return;
-  }
-
-  //完整且有效，立即解码
-  GetRemoteControl()->decode(remote_frame_buffer);
-
-  //只在有效帧到来时更新这些状态
-  remote_last_valid_rx_ms = hello_world::tick::GetTickMs();
-  remote_has_valid_frame = true;
-  remote_valid_frame_count = remote_valid_frame_count + 1;
-}
-
-static void ProcessRemoteRxPosition(uint16_t position, bool idle_event)
-{
-  if (position == 0 || position > kRemoteRxBufferSize) {
-    return;
-  }
-
-  if (position > remote_rx_last_pos) {
-    //没有越过数组边界，直接处理两次位置之间的数据
-    for (uint16_t i = remote_rx_last_pos; i < position; ++i) {
-      ProcessRemoteRxByte(remote_rx_buffer[i]);
-    }
-
-  } else if (position < remote_rx_last_pos) {
-    //越过边界，先处理缓冲区末尾
-    for (uint16_t i = remote_rx_last_pos;
-         i < kRemoteRxBufferSize; ++i) {
-      ProcessRemoteRxByte(remote_rx_buffer[i]);
-    }
-
-    //再处理缓冲区开头
-    for (uint16_t i = 0; i < position; ++i) {
-      ProcessRemoteRxByte(remote_rx_buffer[i]);
-    }
-  }
-  remote_rx_last_pos = position;
-
-  //如果空闲，丢弃残余数据，重置拼帧状态
-  if (idle_event) {
-  remote_frame_length = 0;
-  remote_frame_aligned = true;
-  }
-}
-
-
-extern "C" void HAL_UARTEx_RxEventCallback(
-    UART_HandleTypeDef *huart, uint16_t Size)
-{
-  if (robot::remote_forward::kReceiverOnChassis || huart != &huart3 || !remote_rx_started) {
-    return;
-  }
-
-  if (Size == 0 || Size > kRemoteRxBufferSize) {
-    return;
-  }
-
-  HAL_UART_RxEventTypeTypeDef event =
-      HAL_UARTEx_GetRxEventType(huart);
-
-  switch (event) {
-    case HAL_UART_RXEVENT_HT:    // DMA 写到缓冲区一半
-    case HAL_UART_RXEVENT_TC:    // DMA 写到缓冲区末尾
-    case HAL_UART_RXEVENT_IDLE:  // 串口检测到空闲
-      ProcessRemoteRxPosition(
-          Size,
-          event == HAL_UART_RXEVENT_IDLE
-      );
-      break;
-
-    default:
-      break;
-  }
-
-  // 循环 DMA 会继续接收，这里不重新启动 DMA。
 }

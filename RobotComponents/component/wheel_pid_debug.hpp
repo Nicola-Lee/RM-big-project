@@ -38,8 +38,10 @@ static_assert(kDurationMs > 0 && kDurationMs <= 30000);
 
 // 从本次实验启动时刻计时；未限幅目标仍由原Chassis/PID/电机执行限制。
 constexpr float TargetRadS(uint32_t elapsed_ms) {
-  if(elapsed_ms>=kDurationMs)return 0.0f;
-  if constexpr(kWaveform==Waveform::Constant)return kTargetRadS;
+  if(elapsed_ms>=kDurationMs)
+    return 0.0f;
+  if constexpr(kWaveform==Waveform::Constant)
+    return kTargetRadS;
   constexpr float kTwoPi=6.2831853071795864769f;
   const float t_s=static_cast<float>(elapsed_ms)*0.001f;
   return kSineOffsetRadS+kSineAmplitudeRadS*
@@ -48,7 +50,11 @@ constexpr float TargetRadS(uint32_t elapsed_ms) {
 
 // 验证两板使用同一实验输入及协议；PID/前馈/限幅只有底盘原配置这一份。
 constexpr uint32_t HashWord(uint32_t h, uint32_t v) {
-  for (unsigned i=0;i<4;++i) { h=(h^(v&255u))*16777619u; v>>=8; }
+  for (unsigned i=0;i<4;++i) 
+  { 
+    h=(h^(v&255u))*16777619u; 
+    v>>=8; 
+  }
   return h;
 }
 constexpr uint32_t ConfigTag() {
@@ -86,16 +92,29 @@ struct Link {
     return seen&&compatible&&uint32_t(now-received_ms)<kFreshMs;
   }
   constexpr bool accept(Frame f,uint32_t now,bool command) {
-    if(f.tag!=ConfigTag()||f.code>(command?2u:4u)) { compatible=false; return false; }
+    if(f.tag!=ConfigTag()||f.code>(command?2u:4u)) 
+    { 
+      compatible=false; 
+      return false; 
+    }
     if(seen) {
       const uint16_t delta=uint16_t(f.sequence-frame.sequence);
-      if(delta==0) return false; // 重复报文绝不刷新许可
-      if(delta>=0x8000u) {
+      if(delta==0) 
+      {
+        return false; // 重复报文绝不刷新许可
+      }
+      if(delta>=0x8000u) 
+      {
         // 对端重启可在静止阶段重同步；运行帧绝不能重同步/恢复输出。
         if(uint32_t(now-received_ms)<kFreshMs||f.code>1u) return false;
       }
     }
-    frame=f;received_ms=now;seen=true;compatible=true;return true;
+    frame=f;
+    received_ms=now;
+    seen=true;
+    compatible=true;
+
+    return true;
   }
 };
 
@@ -108,20 +127,42 @@ struct WheelGate {
   bool saw_stop=false;
   constexpr void fault(Reason r) {state=State::Fault;reason=r;saw_stop=false;}
   constexpr void step(bool healthy,Reason failure,const Link &link,uint32_t now) {
-    if(!healthy){fault(failure);return;}
-    if(!link.fresh(now)){fault(link.seen&&!link.compatible?Reason::Configuration:Reason::PeerOffline);return;}
+    if(!healthy)
+    {
+      fault(failure);
+      return;
+    }
+    if(!link.fresh(now))
+    {
+      fault(link.seen&&!link.compatible?Reason::Configuration:Reason::PeerOffline);
+      return;
+    }
     const auto p=static_cast<Phase>(link.frame.code);
     if(p==Phase::Stop){
       state=State::Waiting;reason=Reason::PreparationRequired;saw_stop=true;return;
     }
     if(p==Phase::Prepare){
-      if(state==State::Running){fault(Reason::Released);return;}
-      if(saw_stop){state=State::Armed;reason=Reason::None;session=link.frame.session;saw_stop=false;}
-      else if(state==State::Armed&&session!=link.frame.session)fault(Reason::PeerStopped);
+      if(state==State::Running)
+      {
+        fault(Reason::Released);
+        return;
+      }
+      if(saw_stop){
+        state=State::Armed;reason=Reason::None;session=link.frame.session;saw_stop=false;
+      }
+      else if(state==State::Armed&&session!=link.frame.session){
+        fault(Reason::PeerStopped);
+      }
       return;
     }
-    if(session!=link.frame.session){fault(Reason::PeerStopped);return;}
-    if(state==State::Armed){state=State::Running;reason=Reason::None;started_ms=now;}
+    if(session!=link.frame.session){
+      fault(Reason::PeerStopped);
+      return;
+    }
+    if(state==State::Armed)
+    {
+      state=State::Running;reason=Reason::None;started_ms=now;
+    }
     if(state==State::Running&&uint32_t(now-started_ms)>=kDurationMs){
       state=State::Finished;reason=Reason::Duration;
     }
@@ -140,30 +181,65 @@ struct Trigger {
   constexpr void fault(Reason r){state=State::Fault;reason=r;preparing=false;}
   constexpr void step(bool remote_safe,uint8_t right,bool healthy,const Link &peer,uint32_t now){
     const bool rising=right==1&&previous_right!=1;previous_right=right;
-    if(!remote_safe||!(right==1||right==2||right==3)){fault(Reason::RemoteOrSwitch);return;}
-    if(!healthy){fault(Reason::Communication);return;}
-    if(!peer.fresh(now)){fault(peer.seen&&!peer.compatible?Reason::Configuration:Reason::PeerOffline);return;}
+    if(!remote_safe||!(right==1||right==2||right==3))
+    {
+      fault(Reason::RemoteOrSwitch);
+      return;
+    }
+    if(!healthy){
+      fault(Reason::Communication);
+      return;
+    }
+    if(!peer.fresh(now)){
+      fault(peer.seen&&!peer.compatible?Reason::Configuration:Reason::PeerOffline);
+      return;
+    }
     const auto ps=static_cast<State>(peer.frame.code);
     if(state==State::Running){
-      if(right!=1){state=State::Finished;reason=Reason::Released;preparing=false;return;}
-      if(uint32_t(now-started_ms)>=kDurationMs){state=State::Finished;reason=Reason::Duration;return;}
+      if(right!=1)
+      {
+        state=State::Finished;reason=Reason::Released;preparing=false;return;
+      }
+      if(uint32_t(now-started_ms)>=kDurationMs){
+        state=State::Finished;reason=Reason::Duration;return;
+      }
       if(peer.frame.session!=session||ps==State::Fault||ps==State::Waiting||ps==State::Finished||
-         (ps==State::Armed&&uint32_t(now-started_ms)>=kFreshMs))fault(Reason::PeerStopped);
+         (ps==State::Armed&&uint32_t(now-started_ms)>=kFreshMs)){
+        fault(Reason::PeerStopped);
+      }
       return;
     }
     if(state==State::Armed){
-      if(ps==State::Fault||uint32_t(now-armed_ms)>=5000u){fault(Reason::PeerStopped);return;}
+      if(ps==State::Fault||uint32_t(now-armed_ms)>=5000u)
+      {
+        fault(Reason::PeerStopped);
+        return;
+      }
       if(rising){
-        if(ps==State::Armed&&peer.frame.session==session){state=State::Running;reason=Reason::None;started_ms=now;}
+        if(ps==State::Armed&&peer.frame.session==session)
+        {
+          state=State::Running;reason=Reason::None;started_ms=now;
+        }
         else fault(Reason::PreparationRequired);
       }
       return;
     }
     // 上电右拨杆已经在上档时永不启动；下档+中立连续100ms才能准备新实验。
-    if(right!=2||ps!=State::Waiting){preparing=false;return;}
-    if(!preparing){preparing=true;prepare_since=now;}
+    if(right!=2||ps!=State::Waiting)
+    {
+      preparing=false;
+      return;
+    }
+    if(!preparing){
+      preparing=true;
+      prepare_since=now;
+    }
     if(uint32_t(now-prepare_since)>=kPrepareMs){
-      ++session;state=State::Armed;reason=Reason::None;armed_ms=now;preparing=false;
+      ++session;
+      state=State::Armed;
+      reason=Reason::None;
+      armed_ms=now;
+      preparing=false;
     }
   }
 };

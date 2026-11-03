@@ -38,8 +38,9 @@ hello_world::remote_control::DT7 *GetRemoteControl() {
    *   2. （可选）如果你自建了其它需要共享的通信对象，也在此暴露访问器。
    *
    * 约束 / 提示：
-   *   - DT7 只负责解码 18 字节 DBUS，串口收发在 Task/component/comm_task.cpp 完成。
-   *   - 解码入口：Task/component/comm_task.cpp 的 HAL_UARTEx_RxEventCallback。
+   *   - DT7只负责解码18字节DBUS；物理UART接收和CAN转发在底盘完成。
+   *   - 云台解码入口：Task/component/comm_task.cpp 的 ReceiveForwardedRemote。
+   *     CAN1三片完整重组并校验后，才调用此对象的decode。
    */
   static hello_world::remote_control::DT7 remote_control;
   return &remote_control;

@@ -31,6 +31,7 @@ extern "C" {
 /* Exported function prototypes ----------------------------------------------*/
 void CommTaskInit(void);
 void CommTask(void);
+// 兼容Cube生成main.c中的原调用；当前为空入口，遥控输入由CAN转发提供。
 void RemoteControlRxPoll(void);
 #ifdef __cplusplus
 } 
