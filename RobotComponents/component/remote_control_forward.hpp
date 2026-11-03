@@ -49,12 +49,15 @@ struct Receiver {
  constexpr void invalidate(){has_frame=false;urgent_stop=true;mask=0;}
  constexpr Result invalid(){++rejected;invalidate();return Result::Invalid;}
  constexpr Result accept(uint32_t id,const CanFrame &data,uint32_t now){
-   if(!IsId(id))return Result::Ignored;
+   if(!IsId(id))
+    return Result::Ignored;
    const unsigned part=id-kFirstId;const uint8_t flags=data[1],seq=data[0];
-   if((flags&0xC0)!=kVersion)return invalid();
+   if((flags&0xC0)!=kVersion)
+    return invalid();
    const uint32_t age=(flags&kAgeMask)*kAgeUnitMs;
    // 下档标志只会收紧许可；完成一组新的有效帧后才可能解除。
-   if(flags&kStop)urgent_stop=true;
+   if(flags&kStop)
+    urgent_stop=true;
    if(!(flags&kOnline)||age>=kTimeoutMs){
      stop_sequence_seen=true;stop_sequence=seq;stop_ms=now;invalidate();return Result::Stopped;
    }
@@ -62,37 +65,73 @@ struct Receiver {
      const uint8_t delta=uint8_t(seq-stop_sequence);
      // 离线声明之后，邮箱中滞留的同序号或更旧分帧不能恢复许可。
      if(delta==0||(delta>=128&&uint32_t(now-stop_ms)<kTimeoutMs)){
-       ++duplicates;return Result::Ignored;
+       ++duplicates;
+       return Result::Ignored;
      }
    }
    if(has_sequence){
      const uint8_t delta=uint8_t(seq-last_sequence);
-     if(delta==0){++duplicates;return Result::Ignored;}
-     if(delta>=128&&uint32_t(now-accepted_ms)<kTimeoutMs)return Result::Ignored;
+     if(delta==0)
+     {
+      ++duplicates;
+      return Result::Ignored;
+     }
+     if(delta>=128&&uint32_t(now-accepted_ms)<kTimeoutMs)
+     {
+      return Result::Ignored;
+     }
    }
-   if(mask&&uint32_t(now-assembly_ms)>=kAssemblyMs)mask=0;
-   if(mask&&seq!=sequence){
-     if(uint8_t(seq-sequence)>=128)return Result::Ignored;
+   if(mask&&uint32_t(now-assembly_ms)>=kAssemblyMs)
+   {
      mask=0;
    }
-   if(!mask){sequence=seq;assembly_ms=now;}
+   if(mask&&seq!=sequence){
+     if(uint8_t(seq-sequence)>=128)
+     {
+      return Result::Ignored;
+     }
+     mask=0;
+   }
+   if(!mask){
+     sequence=seq;assembly_ms=now;
+   }
    const uint8_t bit=uint8_t(1u<<part);
    if(mask&bit){
      for(unsigned i=0;i<6;++i)if(staging[part*6+i]!=data[i+2])return invalid();
      ++duplicates;return Result::Ignored;
    }
-   for(unsigned i=0;i<6;++i)staging[part*6+i]=data[i+2];
-   part_ms[part]=now;part_age[part]=age;part_stop[part]=(flags&kStop)!=0;mask|=bit;
-   if(mask!=7)return Result::Partial;
+   for(unsigned i=0;i<6;++i)
+   {
+     staging[part*6+i]=data[i+2];
+   }
+   part_ms[part]=now;
+   part_age[part]=age;
+   part_stop[part]=(flags&kStop)!=0;mask|=bit;
+   if(mask!=7)
+   {
+     return Result::Partial;
+   }
    mask=0;
-   if(!Valid(staging))return invalid();
+   if(!Valid(staging))
+   {
+     return invalid();
+   }
    uint32_t oldest_age=0;
    for(unsigned i=0;i<3;++i){
-     if(part_stop[i]!=Stopped(staging))return invalid();
+     if(part_stop[i]!=Stopped(staging))
+     {
+       return invalid();
+     }
      const uint32_t elapsed=uint32_t(now-part_ms[i])+part_age[i];
-     if(elapsed>oldest_age)oldest_age=elapsed;
+     if(elapsed>oldest_age)
+     {
+       oldest_age=elapsed;
+     }
    }
-   if(oldest_age>=kTimeoutMs){invalidate();return Result::Stopped;}
+   if(oldest_age>=kTimeoutMs)
+   {
+     invalidate();return Result::Stopped;
+   }
    frame=staging;valid_ms=now-oldest_age;accepted_ms=now;
    has_frame=true;has_sequence=true;stop_sequence_seen=false;last_sequence=seq;urgent_stop=Stopped(frame);++completed;
    return Result::Complete;

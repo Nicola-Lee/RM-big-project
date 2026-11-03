@@ -34,17 +34,17 @@
 #include "robot.hpp"
 #include "runtime_monitor.hpp"
 #include "wheel_pid_debug.hpp"
+#include "gimbal_pid_debug.hpp"
 #include "remote_probe.hpp"
 #include <cmath>
 /* Exported function definitions ---------------------------------------------*/
 static volatile bool comm_initialized = false;
 
-
 namespace {
 // 所有发送统一记录入邮箱结果、忙状态和完成回调；此处不等待总线。
 bool TryQueueBoardFrame(uint32_t id, const uint8_t data[8]) {
-  const bool control=id==robot::board_protocol::kVelocityId&&(data[7]&4)!=0;
-  return robot::runtime::TrySend(robot::runtime::CanBus::One,id,data,control);
+  const bool control = id == robot::board_protocol::kVelocityId && (data[7] & 4) != 0;
+  return robot::runtime::TrySend(robot::runtime::CanBus::One, id, data, control);
 }
 }
 
@@ -52,17 +52,24 @@ namespace {
 uint32_t wheel_last_rx_ms[4]{};
 bool wheel_has_feedback[4]{};
 }
+
 void RecordWheelFeedback(int index) {
-  if(index<0||index>=4)return;
-  wheel_last_rx_ms[index]=hello_world::tick::GetTickMs();wheel_has_feedback[index]=true;
+  if (index < 0 || index >= 4)
+    return;
+  wheel_last_rx_ms[index] = hello_world::tick::GetTickMs();
+  wheel_has_feedback[index] = true;
 }
+
 void GetWheelFeedbackSnapshot(WheelFeedbackSnapshot &out) {
-  const uint32_t saved=__get_PRIMASK();__disable_irq();
-  const uint32_t now=hello_world::tick::GetTickMs();out={};
-  for(int i=0;i<4;++i){
-    auto *motor=GetMotorWheel(i);out.velocity[i]=motor->vel();
-    out.valid[i]=robot::board_protocol::Fresh(wheel_has_feedback[i],now,wheel_last_rx_ms[i])&&
-                 std::isfinite(out.velocity[i]);
+  const uint32_t saved = __get_PRIMASK();
+  __disable_irq();
+  const uint32_t now = hello_world::tick::GetTickMs();
+  out = {};
+  for (int i = 0; i < 4; ++i) {
+    auto *motor = GetMotorWheel(i);
+    out.velocity[i] = motor->vel();
+    out.valid[i] = robot::board_protocol::Fresh(wheel_has_feedback[i], now, wheel_last_rx_ms[i]) &&
+                   std::isfinite(out.velocity[i]);
   }
   __set_PRIMASK(saved);
 }
@@ -70,20 +77,27 @@ void GetWheelFeedbackSnapshot(WheelFeedbackSnapshot &out) {
 bool PublishChassisBoardState(const robot::GimbalChassisComm::ChassisData &state) {
   return GetGimbalChassisComm()->setLocalChassis(state);
 }
+
 namespace {
 void TransmitBoardStatus() {
-  auto *comm=GetGimbalChassisComm();
-  auto state=comm->localChassis();
+  auto *comm = GetGimbalChassisComm();
+  auto state = comm->localChassis();
   hello_world::imu::ImuSnapshot imu{};
-  state.imu_ready=GetImu()->getSnapshot(imu);
+  state.imu_ready = GetImu()->getSnapshot(imu);
   // local_ready还需由Robot确认电机、配置等；此处只能进一步收紧。
-  state.local_ready=state.local_ready&&state.imu_ready;
-  if(state.life==robot::LifeState::Working&&!state.local_ready)state.emergency_stop=true;
-  if(state.emergency_stop)state.target_valid=false;
-  if(!comm->setLocalChassis(state)){robot::runtime::SetFatal(robot::runtime::Fatal::Encoder);return;}
+  state.local_ready = state.local_ready && state.imu_ready;
+  if (state.life == robot::LifeState::Working && !state.local_ready)
+    state.emergency_stop = true;
+  if (state.emergency_stop)
+    state.target_valid = false;
+  if (!comm->setLocalChassis(state)) {
+    robot::runtime::SetFatal(robot::runtime::Fatal::Encoder);
+    return;
+  }
   uint8_t data[8]{};
-  if(robot::runtime::CanMailboxAvailable(robot::runtime::CanBus::One)&&comm->encode(data)&&
-     TryQueueBoardFrame(comm->tx_id(),data))comm->onTxQueued(comm->tx_id());
+  if (robot::runtime::CanMailboxAvailable(robot::runtime::CanBus::One) && comm->encode(data) &&
+      TryQueueBoardFrame(comm->tx_id(), data))
+    comm->onTxQueued(comm->tx_id());
 }
 }
 
@@ -116,21 +130,22 @@ void CommTaskInit(void) {
   }
 
   // CAN1消息进入FIFO0
-  if (HAL_CAN_ActivateNotification(
-          &hcan1, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK) {
+  if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK) {
     Error_Handler();
   }
 
   // CAN2消息进入FIFO1
-  if (HAL_CAN_ActivateNotification(
-          &hcan2, CAN_IT_RX_FIFO1_MSG_PENDING) != HAL_OK) {
+  if (HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO1_MSG_PENDING) != HAL_OK) {
     Error_Handler();
   }
 
-  const uint32_t tx_error_notifications=CAN_IT_TX_MAILBOX_EMPTY|CAN_IT_BUSOFF|
-      CAN_IT_ERROR_WARNING|CAN_IT_ERROR_PASSIVE|CAN_IT_ERROR;
-  if(HAL_CAN_ActivateNotification(&hcan1,tx_error_notifications|CAN_IT_RX_FIFO0_OVERRUN)!=HAL_OK||
-     HAL_CAN_ActivateNotification(&hcan2,tx_error_notifications|CAN_IT_RX_FIFO1_OVERRUN)!=HAL_OK){
+  const uint32_t tx_error_notifications = CAN_IT_TX_MAILBOX_EMPTY | CAN_IT_BUSOFF |
+                                          CAN_IT_ERROR_WARNING | CAN_IT_ERROR_PASSIVE |
+                                          CAN_IT_ERROR;
+  if (HAL_CAN_ActivateNotification(&hcan1, tx_error_notifications | CAN_IT_RX_FIFO0_OVERRUN) !=
+          HAL_OK ||
+      HAL_CAN_ActivateNotification(&hcan2, tx_error_notifications | CAN_IT_RX_FIFO1_OVERRUN) !=
+          HAL_OK) {
     Error_Handler();
   }
   comm_initialized = true;
@@ -141,29 +156,48 @@ void CommTaskInit(void) {
 
 void CommTask(void) {
   using namespace robot::runtime;
-  if(!comm_initialized){SetFatal(Fatal::MissingObject);return;}
+  if (!comm_initialized) {
+    SetFatal(Fatal::MissingObject);
+    return;
+  }
   ServiceCan();
   remote_probe::Forward();
-  if constexpr(robot::wheel_debug::kWheelPidDebugEnabled){
+  if constexpr (robot::gimbal_debug::kEnabled) {
+    robot::gimbal_debug::Communicate();
+    Mark(Task::Communication);
+    return;
+  }
+  if constexpr (robot::wheel_debug::kWheelPidDebugEnabled) {
     robot::wheel_debug::Communicate();
     Mark(Task::Communication);
     return;
   }
   TransmitBoardStatus();
-  auto *controller=GetRobot();
-  if(controller==nullptr){SetControlPermit(false);SetFatal(Fatal::MissingObject);return;}
-  const bool allow_control=controller->motorAction()==robot::control::MotorAction::Control;
+  auto *controller = GetRobot();
+  if (controller == nullptr) {
+    SetControlPermit(false);
+    SetFatal(Fatal::MissingObject);
+    return;
+  }
+  const bool allow_control = controller->motorAction() == robot::control::MotorAction::Control;
   SetControlPermit(allow_control);
   // 即使本次CAN2邮箱忙，也先清理不被许可的控制量，然后继续完成本轮处理。
   uint8_t data[8]{};
-  for(int i=0;i<4;++i){
-    auto *motor=GetMotorWheel(i);
-    if(motor==nullptr){SetFatal(Fatal::MissingObject);return;}
-    if(!allow_control)motor->setInput(0.0f);
-    if(!motor->encode(data)){SetFatal(Fatal::Encoder);return;}
+  for (int i = 0; i < 4; ++i) {
+    auto *motor = GetMotorWheel(i);
+    if (motor == nullptr) {
+      SetFatal(Fatal::MissingObject);
+      return;
+    }
+    if (!allow_control)
+      motor->setInput(0.0f);
+    if (!motor->encode(data)) {
+      SetFatal(Fatal::Encoder);
+      return;
+    }
   }
-  if(CanMailboxAvailable(CanBus::Two))
-    TrySend(CanBus::Two,hello_world::motor::M3508::GetTxId(1),data,allow_control);
+  if (CanMailboxAvailable(CanBus::Two))
+    TrySend(CanBus::Two, hello_world::motor::M3508::GetTxId(1), data, allow_control);
   // 邮箱忙/提交失败是有界处理结果，不跳过任务完成记录，更不在这里直接喂狗。
   Mark(Task::Communication);
 }

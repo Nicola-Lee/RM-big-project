@@ -59,6 +59,10 @@ struct GimbalResult {
   GimbalMotion error{};
   float yaw_torque_nm = 0.0f;
   float pitch_torque_nm = 0.0f;
+  float yaw_feedforward_nm = 0.0f;
+  float pitch_feedforward_nm = 0.0f;
+  bool yaw_output_limited = false;
+  bool pitch_output_limited = false;
   bool active = false;
   bool target_captured = false;  // 本周期为重新进入控制，捕获当前位置并保持零转矩
   bool pitch_target_clamped = false;
@@ -75,6 +79,9 @@ class Gimbal {
             hello_world::motor::DaMiao *yaw, hello_world::motor::DaMiao *pitch,
             hello_world::pid::Pid *yaw_pid, hello_world::pid::Pid *pitch_pid);
   bool update(const GimbalControlInput &input);
+  // 调试时pitch始终受控；yaw_control=false允许yaw失能且不要求yaw PID已整定。
+  bool debugReady(bool yaw_control) const;
+  bool updateDebug(const GimbalControlInput &input, bool yaw_control);
   // 清零转矩和控制历史；电机 enable/disable 由 Robot/通信层统一安排。
   void stop();
   bool configured() const { return configured_; }
@@ -118,6 +125,29 @@ class Gimbal {
            p.yaw_target_rate_rad_s > 0.0f && p.pitch_target_rate_rad_s > 0.0f &&
            p.yaw_torque_limit_nm > 0.0f && p.pitch_torque_limit_nm > 0.0f;
   }
+  static constexpr bool DebugParamsReady(const GimbalParams &p, bool yaw_control) {
+    if (!ValidParams(p) || !p.pitch_limits_calibrated ||
+        p.pitch_target_rate_rad_s <= 0.0f || p.pitch_torque_limit_nm <= 0.0f) {
+      return false;
+    }
+    if (yaw_control && (p.yaw_target_rate_rad_s <= 0.0f ||
+                        p.yaw_torque_limit_nm <= 0.0f)) {
+      return false;
+    }
+    return true;
+  }
+  static constexpr bool DebugInputReady(const GimbalControlInput &input, bool yaw_control) {
+    if (!input.enabled || input.mode != GimbalMode::JointAngle ||
+        !input.target_valid || !input.pitch_feedback_valid ||
+        !IsFinite(input.target.pitch) || !IsFinite(input.dt_s) ||
+        input.dt_s <= 0.0f || input.dt_s > 0.02f) {
+      return false;
+    }
+    if (yaw_control && (!input.yaw_feedback_valid || !IsFinite(input.target.yaw))) {
+      return false;
+    }
+    return true;
+  }
   // 非零转矩必须经过这一判定；电机自身状态另由 update 检查。
   static constexpr bool InputReady(const GimbalControlInput &input) {
     return input.enabled && input.mode == GimbalMode::JointAngle &&
@@ -151,6 +181,8 @@ class Gimbal {
   }
 
  private:
+  bool updateAxes(const GimbalControlInput &input, bool yaw_control, bool debug);
+  bool yaw_controlled_ = false;
   GimbalParams params_{};
   hello_world::motor::DaMiao *yaw_ = nullptr;
   hello_world::motor::DaMiao *pitch_ = nullptr;

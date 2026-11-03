@@ -23,6 +23,21 @@ bool Gimbal::controlReady() const {
          pitch_pid_!=nullptr && yaw_pid_->controlReady() && pitch_pid_->controlReady();
 }
 
+bool Gimbal::debugReady(bool yaw_control) const {
+  if (!configured_ || !DebugParamsReady(params_, yaw_control)) {
+    return false;
+  }
+  if (pitch_pid_ == nullptr || !pitch_pid_->controlReady()) {
+    return false;
+  }
+  if (yaw_control) {
+    if (yaw_pid_ == nullptr || !yaw_pid_->controlReady()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool Gimbal::NormalizeYaw(float angle, float &normalized) {
   normalized = 0.0f;
   if (!IsFinite(angle)) return false;
@@ -41,8 +56,9 @@ bool Gimbal::init(const GimbalParams &params,
       yaw_pid == nullptr || pitch_pid == nullptr || yaw_pid == pitch_pid ||
       yaw->id() != 2 || pitch->id() != 1 ||
       yaw->get_input_type() != hello_world::motor::InputType::kTorq ||
-      pitch->get_input_type() != hello_world::motor::InputType::kTorq)
+      pitch->get_input_type() != hello_world::motor::InputType::kTorq) {
     return false;
+  }
   params_ = params;
   yaw_ = yaw;
   pitch_ = pitch;
@@ -54,37 +70,77 @@ bool Gimbal::init(const GimbalParams &params,
 }
 
 void Gimbal::stop() {
-  if (yaw_ != nullptr) yaw_->setInput(0.0f);
-  if (pitch_ != nullptr) pitch_->setInput(0.0f);
-  if (yaw_pid_ != nullptr) yaw_pid_->reset();
-  if (pitch_pid_ != nullptr) pitch_pid_->reset();
+  if (yaw_ != nullptr) {
+    yaw_->setInput(0.0f);
+  }
+  if (pitch_ != nullptr) {
+    pitch_->setInput(0.0f);
+  }
+  if (yaw_pid_ != nullptr) {
+    yaw_pid_->reset();
+  }
+  if (pitch_pid_ != nullptr) {
+    pitch_pid_->reset();
+  }
   result_ = {};
   target_initialized_ = false;
+  yaw_controlled_ = false;
   has_yaw_error_ = false;
   last_yaw_error_ = 0.0f;
 }
 
 bool Gimbal::update(const GimbalControlInput &input) {
-  const auto fail = [this]() { stop(); return false; };
-  if (!configured_ || !ControlParamsReady(params_) || !InputReady(input)) return fail();
+  return updateAxes(input, true, false);
+}
+
+bool Gimbal::updateDebug(const GimbalControlInput &input, bool yaw_control) {
+  return updateAxes(input, yaw_control, true);
+}
+
+bool Gimbal::updateAxes(const GimbalControlInput &input, bool yaw_control, bool debug) {
+  const auto fail = [this]() {
+    stop();
+    return false;
+  };
+  if (debug) {
+    if (!debugReady(yaw_control) || !DebugInputReady(input, yaw_control)) {
+      return fail();
+    }
+  } else if (!configured_ || !ControlParamsReady(params_) || !InputReady(input)) {
+    return fail();
+  }
   using Dm = hello_world::motor::DaMiao;
   // 驱动收到故障状态时 is_enabled 可能仍保留旧值，必须同时核对状态码。
-  if (!yaw_->is_enabled() || !pitch_->is_enabled() ||
-      yaw_->status_code() != Dm::StatusCode::kMotorEnabled ||
-      pitch_->status_code() != Dm::StatusCode::kMotorEnabled ||
-      yaw_->current_ctrl_mode() != Dm::CtrlMode::kMIT ||
+  if (!pitch_->is_enabled() || pitch_->status_code() != Dm::StatusCode::kMotorEnabled ||
       pitch_->current_ctrl_mode() != Dm::CtrlMode::kMIT ||
-      yaw_->get_input_type() != hello_world::motor::InputType::kTorq ||
-      pitch_->get_input_type() != hello_world::motor::InputType::kTorq)
+      pitch_->get_input_type() != hello_world::motor::InputType::kTorq) {
     return fail();
+  }
+  if (yaw_control) {
+    if (!yaw_->is_enabled() || yaw_->status_code() != Dm::StatusCode::kMotorEnabled ||
+        yaw_->current_ctrl_mode() != Dm::CtrlMode::kMIT ||
+        yaw_->get_input_type() != hello_world::motor::InputType::kTorq) {
+      return fail();
+    }
+  }
 
   GimbalResult next{};
   GimbalMotion desired = input.target;
   next.feedback.pitch = pitch_->angle();
-  if (!NormalizeYaw(yaw_->angle(), next.feedback.yaw) ||
-      !NormalizeYaw(input.target.yaw, desired.yaw) || !IsFinite(next.feedback.pitch) ||
-      next.feedback.pitch < -kPi || next.feedback.pitch >= kPi)
+  if (!IsFinite(next.feedback.pitch) || next.feedback.pitch < -kPi ||
+      next.feedback.pitch >= kPi) {
     return fail();
+  }
+  if (yaw_control) {
+    if (!NormalizeYaw(yaw_->angle(), next.feedback.yaw) ||
+        !NormalizeYaw(input.target.yaw, desired.yaw)) {
+      return fail();
+    }
+  } else {
+    desired.yaw = 0.0f;
+    yaw_pid_->reset();
+    has_yaw_error_ = false;
+  }
   next.pitch_target_clamped = desired.pitch < params_.pitch_min_rad ||
                               desired.pitch > params_.pitch_max_rad;
 
@@ -101,51 +157,90 @@ bool Gimbal::update(const GimbalControlInput &input) {
     next.target_captured = true;
     result_ = next;
     target_initialized_ = true;
+    yaw_controlled_ = yaw_control;
     return true;
   }
 
+  // 调yaw前先保持pitch。随后接入yaw时只捕获yaw，不清除pitch的保持历史。
+  if (yaw_control && !yaw_controlled_) {
+    result_.target.yaw = next.feedback.yaw;
+    desired.yaw = next.feedback.yaw;
+    yaw_pid_->reset();
+    has_yaw_error_ = false;
+  }
+  yaw_controlled_ = yaw_control;
+
   // 限制每周期的目标变化；先检查乘法，避免极端配置产生无穷大。
-  if (!IsFinite(params_.yaw_target_rate_rad_s * input.dt_s) ||
-      !IsFinite(params_.pitch_target_rate_rad_s * input.dt_s)) return fail();
+  if (!IsFinite(params_.pitch_target_rate_rad_s * input.dt_s) ||
+      (yaw_control && !IsFinite(params_.yaw_target_rate_rad_s * input.dt_s))) {
+    return fail();
+  }
   next.target = StepTarget(desired, result_.target, params_, input.dt_s);
+  if (!yaw_control) {
+    next.target.yaw = 0.0f;
+  }
   next.error = {WrapDifference(next.target.yaw - next.feedback.yaw),
                 next.target.pitch - next.feedback.pitch};
   // 最短角方向在 +/-pi 处切换时，清除该轴全部 PID 历史，避免 D 项 2pi/dt 尖峰。
-  if (has_yaw_error_ && YawBranchChanged(next.error.yaw, last_yaw_error_)) {
+  if (yaw_control && has_yaw_error_ && YawBranchChanged(next.error.yaw, last_yaw_error_)) {
     yaw_pid_->reset();
     next.yaw_pid_restarted = true;
   }
   const float yaw_rate = WrapDifference(next.target.yaw - result_.target.yaw) / input.dt_s;
   const float pitch_rate = (next.target.pitch - result_.target.pitch) / input.dt_s;
-  const float yaw_ff = params_.yaw_velocity_ff * yaw_rate;
+  const float yaw_ff = yaw_control ? params_.yaw_velocity_ff * yaw_rate : 0.0f;
   const float pitch_ff = params_.pitch_velocity_ff * pitch_rate +
       params_.pitch_gravity_cos_nm * std::cos(next.feedback.pitch) +
       params_.pitch_gravity_sin_nm * std::sin(next.feedback.pitch);
-  if (!IsFinite(yaw_ff) || !IsFinite(pitch_ff)) return fail();
-  const float yaw_torque = yaw_pid_->calculateError(next.error.yaw, input.dt_s, yaw_ff);
+  if (!IsFinite(yaw_ff) || !IsFinite(pitch_ff)) {
+    return fail();
+  }
+  const float yaw_torque = yaw_control
+      ? yaw_pid_->calculateError(next.error.yaw, input.dt_s, yaw_ff)
+      : 0.0f;
+  next.yaw_feedforward_nm = yaw_ff;
+  next.pitch_feedforward_nm = pitch_ff;
   const float pitch_torque = pitch_pid_->calculateError(next.error.pitch, input.dt_s, pitch_ff);
-  if (!IsFinite(yaw_torque) || !IsFinite(pitch_torque)) return fail();
+  if (!IsFinite(yaw_torque) || !IsFinite(pitch_torque)) {
+    return fail();
+  }
   next.yaw_torque_nm = Clamp(yaw_torque, -params_.yaw_torque_limit_nm, params_.yaw_torque_limit_nm);
   const float pitch_limited = Clamp(pitch_torque, -params_.pitch_torque_limit_nm, params_.pitch_torque_limit_nm);
   next.pitch_torque_nm = LimitPitchTorque(next.feedback.pitch, pitch_limited,
                                          params_.pitch_min_rad, params_.pitch_max_rad);
   next.pitch_output_blocked = next.pitch_torque_nm != pitch_limited;
   // 模块限幅比 PID 限幅更小时，清除积分历史，避免持续积累受限方向的输出。
-  if (next.yaw_torque_nm != yaw_torque) yaw_pid_->reset();
-  if (next.pitch_torque_nm != pitch_torque) pitch_pid_->reset();
+  if (next.yaw_torque_nm != yaw_torque) {
+    yaw_pid_->reset();
+  }
+  if (next.pitch_torque_nm != pitch_torque) {
+    pitch_pid_->reset();
+  }
 
   const auto yaw_status = yaw_->setInput(next.yaw_torque_nm);
   const auto pitch_status = pitch_->setInput(next.pitch_torque_nm);
   using Status = hello_world::motor::Status;
-  if (yaw_status == Status::kInputTypeError || pitch_status == Status::kInputTypeError)
+  if (yaw_status == Status::kInputTypeError || pitch_status == Status::kInputTypeError) {
     return fail();
-  if (yaw_status == Status::kInputValueOverflow) yaw_pid_->reset();
-  if (pitch_status == Status::kInputValueOverflow) pitch_pid_->reset();
+  }
+  if (yaw_status == Status::kInputValueOverflow) {
+    yaw_pid_->reset();
+  }
+  if (pitch_status == Status::kInputValueOverflow) {
+    pitch_pid_->reset();
+  }
   next.yaw_torque_nm = yaw_->getInput();
   next.pitch_torque_nm = pitch_->getInput();
-  if (!IsFinite(next.yaw_torque_nm) || !IsFinite(next.pitch_torque_nm)) return fail();
+  if (!IsFinite(next.yaw_torque_nm) || !IsFinite(next.pitch_torque_nm)) {
+    return fail();
+  }
+  next.yaw_output_limited = yaw_control &&
+      (std::fabs(yaw_pid_->output()) >= yaw_pid_->outputLimit() ||
+       next.yaw_torque_nm != yaw_torque);
+  next.pitch_output_limited = std::fabs(pitch_pid_->output()) >= pitch_pid_->outputLimit() ||
+                              next.pitch_torque_nm != pitch_torque;
   last_yaw_error_ = next.error.yaw;
-  has_yaw_error_ = true;
+  has_yaw_error_ = yaw_control;
   next.active = true;
   result_ = next;
   return true;

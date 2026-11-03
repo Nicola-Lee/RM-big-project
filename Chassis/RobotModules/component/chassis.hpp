@@ -20,8 +20,13 @@
 #include <limits>
 #include "module_state.hpp"
 
-namespace hello_world::motor { class Motor; }
-namespace hello_world::pid { class Pid; }
+namespace hello_world::motor {
+class Motor;
+}
+
+namespace hello_world::pid {
+class Pid;
+}
 
 namespace robot {
 // 数组固定顺序：左前 ID1、左后 ID2、右后 ID3、右前 ID4。
@@ -29,8 +34,8 @@ using WheelValues = std::array<float, 4>;
 
 struct ChassisParams {
   float wheel_radius_m = 0.07786f;
-  float half_length_m = 0.15338f;  // 前后轮心距的一半
-  float half_width_m = 0.15338f;   // 左右轮心距的一半
+  float half_length_m = 0.15338f; // 前后轮心距的一半
+  float half_width_m = 0.15338f;  // 左右轮心距的一半
   // 输出轴/轮子的角速度上限，rad/s。0 表示尚未配置，禁止控制输出。
   float max_wheel_speed_rad_s = 0.0f;
   // 速度前馈：kV * 限幅后的目标轮速；单位 raw/(rad/s)，默认关闭。
@@ -38,26 +43,26 @@ struct ChassisParams {
 };
 
 struct ChassisControlInput {
-  ChassisCommand command{};       // 所有模式下，平移指令均为云台坐标系
-  float relative_yaw_rad = 0.0f;  // 云台朝向 - 底盘朝向，向左为正
+  ChassisCommand command{};      // 所有模式下，平移指令均为云台坐标系
+  float relative_yaw_rad = 0.0f; // 云台朝向 - 底盘朝向，向左为正
   float dt_s = 0.001f;
-  bool enabled = false;          // 由 Robot 的生命状态/急停判定提供
-  bool command_valid = false;    // 包括命令来源在线和数据未超时
-  bool relative_yaw_valid = false;  // 包括角度来源在线和数据未超时
-  std::array<bool, 4> wheel_feedback_valid{};  // 四轮各自的反馈时效
+  bool enabled = false;                       // 由 Robot 的生命状态/急停判定提供
+  bool command_valid = false;                 // 包括命令来源在线和数据未超时
+  bool relative_yaw_valid = false;            // 包括角度来源在线和数据未超时
+  std::array<bool, 4> wheel_feedback_valid{}; // 四轮各自的反馈时效
 };
 
 struct ChassisResult {
-  ChassisFrameVelocity requested_body{};  // 变换后、轮速限幅前
-  ChassisFrameVelocity limited_body{};    // 与限幅后的轮速相对应
+  ChassisFrameVelocity requested_body{}; // 变换后、轮速限幅前
+  ChassisFrameVelocity limited_body{};   // 与限幅后的轮速相对应
   WheelValues wheel_target_rad_s{};
-  WheelValues raw_current{};              // 实际写入电机对象的 kRaw 电流码
+  WheelValues raw_current{}; // 实际写入电机对象的 kRaw 电流码
   float wheel_scale = 0.0f;
   bool active = false;
 };
 
 class Chassis {
- public:
+public:
   using Motors = std::array<hello_world::motor::Motor *, 4>;
   using Pids = std::array<hello_world::pid::Pid *, 4>;
   // 仅初始化/重新配置时调用；借用四个独立电机、PID 对象，不分配堆内存。
@@ -68,47 +73,59 @@ class Chassis {
   void stop();
   // 调试入口仅替换目标轮速来源，复用下面的同一套PID/前馈/电流写入路径。
   bool singleWheelReady(unsigned index) const;
-  bool updateSingleWheel(unsigned index,float target_rad_s,bool feedback_valid,float dt_s);
-  float wheelSpeedLimit() const { return params_.max_wheel_speed_rad_s; }
+  bool updateSingleWheel(unsigned index, float target_rad_s, bool feedback_valid, float dt_s);
+
+  float wheelSpeedLimit() const {
+    return params_.max_wheel_speed_rad_s;
+  }
+
   float wheelFeedforward(unsigned index) const {
-    return index<4?params_.velocity_feedforward_gain[index]:0.0f;
+    return index < 4 ? params_.velocity_feedforward_gain[index] : 0.0f;
   }
-  const ChassisResult &result() const { return result_; }
-  bool configured() const { return configured_; }
+
+  const ChassisResult &result() const {
+    return result_;
+  }
+
+  bool configured() const {
+    return configured_;
+  }
+
   bool controlReady() const;
-  static bool ToChassisFrame(const ChassisCommand &command,
-                             float relative_yaw_rad,
-                             ChassisFrameVelocity &body);
+  static bool
+  ToChassisFrame(const ChassisCommand &command, float relative_yaw_rad, ChassisFrameVelocity &body);
+
   // R(delta)；c、s 分别为 cos(delta)、sin(delta)，由 ToChassisFrame 提供。
-  static constexpr ChassisFrameVelocity RotatePlanar(
-      const ChassisCommand &command, float c, float s) {
-    return {command.vx * c - command.vy * s,
-            command.vx * s + command.vy * c, command.w};
+  static constexpr ChassisFrameVelocity
+  RotatePlanar(const ChassisCommand &command, float c, float s) {
+    return {command.vx * c - command.vy * s, command.vx * s + command.vy * c, command.w};
   }
+
   static constexpr bool IsFinite(float value) {
     return value >= -std::numeric_limits<float>::max() &&
            value <= std::numeric_limits<float>::max();
   }
+
   static constexpr bool ValidParams(const ChassisParams &p) {
-    if (!IsFinite(p.wheel_radius_m) || p.wheel_radius_m <= 0.0f ||
-        !IsFinite(p.half_length_m) || p.half_length_m <= 0.0f ||
-        !IsFinite(p.half_width_m) || p.half_width_m <= 0.0f ||
+    if (!IsFinite(p.wheel_radius_m) || p.wheel_radius_m <= 0.0f || !IsFinite(p.half_length_m) ||
+        p.half_length_m <= 0.0f || !IsFinite(p.half_width_m) || p.half_width_m <= 0.0f ||
         !IsFinite(p.max_wheel_speed_rad_s) || p.max_wheel_speed_rad_s < 0.0f)
       return false;
     for (float gain : p.velocity_feedforward_gain)
-      if (!IsFinite(gain) || gain < 0.0f) return false;
+      if (!IsFinite(gain) || gain < 0.0f)
+        return false;
     return true;
   }
+
   // 四角径向轮轴的全向轮：轮轴沿底盘中心到轮心，主滚动方向与轮轴垂直。
   // 四轮正滚动方向均取带有+X分量的切向；电机dir负责对应实车正转方向。
   // 轮序 LF(+a,+b)、LB(-a,+b)、RB(-a,-b)、RF(+a,-b)。
   // 纯计算接口：不访问电机/PID，可用于静态检查或离线观察。
-  static constexpr bool SolveBody(const ChassisFrameVelocity &body,
-                                  const ChassisParams &p,
-                                  ChassisResult &out) {
+  static constexpr bool
+  SolveBody(const ChassisFrameVelocity &body, const ChassisParams &p, ChassisResult &out) {
     out = {};
-    if (!ValidParams(p) || p.max_wheel_speed_rad_s <= 0.0f ||
-        !IsFinite(body.vx) || !IsFinite(body.vy) || !IsFinite(body.w))
+    if (!ValidParams(p) || p.max_wheel_speed_rad_s <= 0.0f || !IsFinite(body.vx) ||
+        !IsFinite(body.vy) || !IsFinite(body.w))
       return false;
     // double 中间量避免有限 float 输入在求和/除半径时溢出。
     const double vx = body.vx, vy = body.vy;
@@ -117,22 +134,24 @@ class Chassis {
     // 求轮心到中心距离d；a+b与sqrt(a^2+b^2)之比在[1,sqrt(2)]。
     // 固定8次Newton迭代在该范围收敛至double精度，兼容C++20 constexpr。
     double d = a + b;
-    for (unsigned i = 0; i < 8; ++i) d = 0.5 * (d + radius_sq / d);
+    for (unsigned i = 0; i < 8; ++i)
+      d = 0.5 * (d + radius_sq / d);
     // 单位切向为(b/d, +/-a/d)。将轮心速度(vx-w*y,vy+w*x)投影至切向。
     // 正方形底盘的两个平移系数均为1/sqrt(2)，转动系数为轮心半径d。
     const double forward = (b / d) * vx, left = (a / d) * vy;
     const double turn = d * body.w;
     const double r = p.wheel_radius_m;
-    const std::array<double, 4> wheels{
-        (forward - left - turn) / r, (forward + left - turn) / r,
-        (forward - left + turn) / r, (forward + left + turn) / r};
+    const std::array<double, 4> wheels{(forward - left - turn) / r,
+                                       (forward + left - turn) / r,
+                                       (forward - left + turn) / r,
+                                       (forward + left + turn) / r};
     double peak = 0.0;
     for (double wheel : wheels) {
       const double magnitude = wheel < 0.0 ? -wheel : wheel;
-      if (magnitude > peak) peak = magnitude;
+      if (magnitude > peak)
+        peak = magnitude;
     }
-    const double scale = peak > p.max_wheel_speed_rad_s
-                             ? p.max_wheel_speed_rad_s / peak : 1.0;
+    const double scale = peak > p.max_wheel_speed_rad_s ? p.max_wheel_speed_rad_s / peak : 1.0;
     out.requested_body = body;
     out.limited_body = {static_cast<float>(vx * scale),
                         static_cast<float>(vy * scale),
@@ -142,14 +161,17 @@ class Chassis {
       out.wheel_target_rad_s[i] = static_cast<float>(wheels[i] * scale);
     return true;
   }
- private:
-  bool applyWheelTargets(ChassisResult next,const WheelValues &feedback,
-                         const std::array<bool,4> &selected,float dt_s);
+
+private:
+  bool applyWheelTargets(ChassisResult next,
+                         const WheelValues &feedback,
+                         const std::array<bool, 4> &selected,
+                         float dt_s);
   ChassisParams params_{};
   Motors motors_{};
   Pids pids_{};
   ChassisResult result_{};
   bool configured_ = false;
 };
-}  // namespace robot
+} // namespace robot
 #endif
