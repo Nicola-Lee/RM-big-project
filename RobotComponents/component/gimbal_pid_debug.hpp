@@ -11,17 +11,21 @@
 namespace robot::gimbal_debug {
 
 // 修改这些实验配置后，两块板都需要重新编译、烧录。
-inline constexpr bool kEnabled = true;
+inline constexpr bool kEnabled = false;
 enum class Axis : uint8_t { Pitch, Yaw };
-inline constexpr Axis kAxis = Axis::Pitch;
+inline constexpr Axis kAxis = Axis::Yaw;
 
 enum class PitchWaveform : uint8_t { Step, Sine };
 inline constexpr PitchWaveform kPitchWaveform = PitchWaveform::Sine;
 inline constexpr float kPitchSineCenterRad = 0.0f;      // 标定后的pitch零点
 inline constexpr float kPitchSineAmplitudeRad = 0.34906585f; // 20度
 inline constexpr uint32_t kPitchSinePeriodMs = 10000;  // 10秒一个周期
+enum class YawWaveform : uint8_t { Step, Sine };
+inline constexpr YawWaveform kYawWaveform = YawWaveform::Sine;
+inline constexpr float kYawSineAmplitudeRad = 1.04719755f; // 相对启动位置±60度
+inline constexpr uint32_t kYawSinePeriodMs = 10000;       // 程序计时10秒一个周期
 // 完成pitch保持测试后，调yaw前手动置true。它不替代运行中的保持检查。
-inline constexpr bool kPitchHoldConfirmed = false;
+inline constexpr bool kPitchHoldConfirmed = true;
 inline constexpr float kStepRad = 0.05235988f;       // 相对启动位置增加3度
 inline constexpr uint32_t kDurationMs = 30000;
 inline constexpr uint32_t kFreshMs = 100;
@@ -52,6 +56,11 @@ static_assert(control::Finite(kPitchSineAmplitudeRad) && kPitchSineAmplitudeRad 
 static_assert(control::Finite(kPitchSineCenterRad - kPitchSineAmplitudeRad));
 static_assert(control::Finite(kPitchSineCenterRad + kPitchSineAmplitudeRad));
 static_assert(kPitchSinePeriodMs > 0);
+static_assert(kYawWaveform == YawWaveform::Step ||
+              kYawWaveform == YawWaveform::Sine);
+static_assert(control::Finite(kYawSineAmplitudeRad) &&
+              kYawSineAmplitudeRad >= 0.0f && kYawSineAmplitudeRad < control::kPi);
+static_assert(kYawSinePeriodMs > 0);
 static_assert(control::Finite(kStepRad));
 static_assert(control::Abs(kStepRad) < control::kPi);
 static_assert(kDurationMs > 0 && kDurationMs <= 30000);
@@ -85,12 +94,35 @@ constexpr float PitchTargetRad(float captured_rad, uint32_t elapsed_ms) {
   return kPitchSineCenterRad + kPitchSineAmplitudeRad * std::sin(phase);
 }
 
+constexpr float YawSineMaxRateRadS() {
+  return 2.0f * control::kPi * kYawSineAmplitudeRad *
+         (1000.0f / static_cast<float>(kYawSinePeriodMs));
+}
+
+// elapsed_ms从yaw取得有效反馈、真正开始控制时计时，不含pitch保持等待时间。
+constexpr float YawTargetOffsetRad(uint32_t elapsed_ms) {
+  if constexpr (kYawWaveform == YawWaveform::Step) {
+    return kStepRad;
+  }
+  const uint32_t phase_ms = elapsed_ms % kYawSinePeriodMs;
+  const float phase = 2.0f * control::kPi *
+                      (static_cast<float>(phase_ms) /
+                       static_cast<float>(kYawSinePeriodMs));
+  return kYawSineAmplitudeRad * std::sin(phase);
+}
+
+constexpr float YawTargetRad(float captured_rad, uint32_t elapsed_ms) {
+  return control::Wrap(captured_rad + YawTargetOffsetRad(elapsed_ms));
+}
+
 constexpr uint32_t ConfigTag() {
-  uint32_t hash = wheel_debug::HashWord(2166136261u, 0x47444202u);
+  uint32_t hash = wheel_debug::HashWord(2166136261u, 0x47444204u);
   const uint32_t words[] = {
       uint32_t(kAxis), uint32_t(kPitchHoldConfirmed), uint32_t(kPitchWaveform),
       std::bit_cast<uint32_t>(kPitchSineCenterRad),
       std::bit_cast<uint32_t>(kPitchSineAmplitudeRad), kPitchSinePeriodMs,
+      uint32_t(kYawWaveform), std::bit_cast<uint32_t>(kYawSineAmplitudeRad),
+      kYawSinePeriodMs,
       std::bit_cast<uint32_t>(kStepRad), kDurationMs, kFreshMs, kPrepareMs,
       kEnableTimeoutMs, kArmedTimeoutMs, kHoldTimeoutMs, kHoldStableMs,
       std::bit_cast<uint32_t>(kPitchMarginRad),
@@ -377,7 +409,15 @@ struct Session {
     }
 
     if (state == State::Preparing || state == State::Armed) {
-      if (in.right != 2 && !(state == State::Armed && rising)) {
+      // 准备尚未完成时必须保持下档。
+      if (state == State::Preparing && in.right != 2) {
+        fault(Reason::PreparationRequired);
+        return;
+      }
+      // 准备完成后允许经过中档，仍不输出控制转矩；5秒期限不重置。
+      // 运行时离开上档的停止逻辑在前面的pitchControl分支处理。
+      if (state == State::Armed &&
+          in.right != 1 && in.right != 2 && in.right != 3) {
         fault(Reason::PreparationRequired);
         return;
       }
@@ -397,9 +437,16 @@ struct Session {
       } else if (uint32_t(now - entered_ms) >= kArmedTimeoutMs) {
         fault(Reason::PreparationTimeout);
       } else if (rising) {
-        if (!in.pitch_feedback || !in.position_safe ||
-            in.peer_reply != Reply::Ready || in.peer_session != session) {
+        if (!in.pitch_feedback) {
+          fault(Reason::FeedbackTimeout);
+          return;
+        }
+        if (!in.position_safe) {
           fault(Reason::PitchRange);
+          return;
+        }
+        if (in.peer_reply != Reply::Ready || in.peer_session != session) {
+          fault(Reason::PeerOffline);
           return;
         }
         state = kAxis == Axis::Pitch ? State::Running : State::HoldingPitch;
@@ -442,6 +489,9 @@ struct Snapshot {
   float error_rad = 0;
   float feedforward_nm = 0;
   float torque_nm = 0;
+  float yaw_center_rad = 0;
+  float yaw_relative_target_rad = 0;
+  float yaw_relative_actual_rad = 0;
   float pitch_hold_rad = 0;
   float pitch_actual_rad = 0;
   float pitch_error_rad = 0;
@@ -456,6 +506,8 @@ void Update();
 void Communicate();
 void Receive(uint32_t id, const uint8_t data[8]);
 extern Snapshot g_gimbal_debug_snapshot;
+// 仅云台定义：保留进入故障/结束状态时的数据，不被后续失能反馈覆盖。
+extern Snapshot g_gimbal_debug_stop_snapshot;
 // 云台保留选中轴开始运动后的前约3.2秒，最后一个槽用于停车快照。
 extern std::array<Snapshot, kEnabled ? kTraceCapacity : 1> g_gimbal_debug_trace;
 extern uint32_t g_gimbal_debug_trace_count;

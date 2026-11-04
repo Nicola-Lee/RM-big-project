@@ -2,7 +2,7 @@
  * @Author: Nicola Lee nlee15428@gmail.com
  * @Date: 2026-10-07 13:04:26
  * @LastEditors: Nicola Lee nlee15428@gmail.com
- * @LastEditTime: 2026-11-03 19:19:41
+ * @LastEditTime: 2026-11-04 23:22:50
  * @FilePath: \omni_skeleton\Gimbal\Instance\component\ins_robot.cpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -77,11 +77,11 @@ robot::Gimbal *GetGimbal() {
     params.yaw_target_rate_rad_s = 1.0f;
     params.pitch_target_rate_rad_s = 0.3f;
     params.yaw_torque_limit_nm = 0.3f;
-    params.pitch_torque_limit_nm = 0.3f;
+    params.pitch_torque_limit_nm = 0.8f;
     // 云台轴前馈和重力补偿系数
-    params.yaw_velocity_ff = 0.0f;
+    params.yaw_velocity_ff = 1.0f;
     params.pitch_velocity_ff = 0.0f;
-    params.pitch_gravity_cos_nm = 0.0f;
+    params.pitch_gravity_cos_nm = 0.5f;
     params.pitch_gravity_sin_nm = 0.0f;
     // 两个 GetMotor 函数实际都返回 DM_J4310，这里转换为达妙基类使用状态接口。
     auto *yaw = static_cast<hello_world::motor::DM_J4310 *>(GetMotorYaw());

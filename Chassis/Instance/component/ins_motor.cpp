@@ -22,15 +22,16 @@
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
 namespace {
-  hello_world::motor::OptionalParams WheelOptions() {
+hello_world::motor::OptionalParams WheelOptions(hello_world::motor::Dir direction) {
   hello_world::motor::OptionalParams opt;
   opt.input_type = hello_world::motor::InputType::kRaw;
-  opt.dir = hello_world::motor::kDirRev;
+  // dir同时应用于反馈和输出，使各轮正轮速都对应带有底盘+X分量的驱动方向。
+  opt.dir = direction;
   opt.ex_redu_rat = 1.0f;
   opt.angle_offset = 0.0f;
   return opt;
-  }
 }
+} // namespace
 hello_world::motor::Motor *GetMotorWheel(int idx) {
   /* TODO【新人任务】:
    * 返回第 idx 号轮电机（M3508）单例。
@@ -47,11 +48,12 @@ hello_world::motor::Motor *GetMotorWheel(int idx) {
    */
   if (idx < 0 || idx >= 4) return nullptr;
   // 轮位以图示底盘坐标为准，不随云台转动：ID1(+X,+Y)、ID2(-X,+Y)、ID3(-X,-Y)、ID4(+X,-Y)。
+  // 已按用户实车观察修正：后两轮ID2/3反向，前两轮ID1/4保持原配置。
   static hello_world::motor::M3508 motors[] = {
-      hello_world::motor::M3508(1, WheelOptions()),
-      hello_world::motor::M3508(2, WheelOptions()),
-      hello_world::motor::M3508(3, WheelOptions()),
-      hello_world::motor::M3508(4, WheelOptions())};
+      hello_world::motor::M3508(1, WheelOptions(hello_world::motor::kDirRev)),
+      hello_world::motor::M3508(2, WheelOptions(hello_world::motor::kDirFwd)),
+      hello_world::motor::M3508(3, WheelOptions(hello_world::motor::kDirFwd)),
+      hello_world::motor::M3508(4, WheelOptions(hello_world::motor::kDirRev))};
   return &motors[idx];
 }
 

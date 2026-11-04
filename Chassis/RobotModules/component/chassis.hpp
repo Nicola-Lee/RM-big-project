@@ -40,6 +40,11 @@ struct ChassisParams {
   float max_wheel_speed_rad_s = 0.0f;
   // 速度前馈：kV * 限幅后的目标轮速；单位 raw/(rad/s)，默认关闭。
   WheelValues velocity_feedforward_gain{};
+  // 实车平移轴校正；在云台速度转为底盘坐标后生效，不交换遥控通道。
+  // false使用标准几何模型；true用于前后与左右运动相互对调的实测配置。
+  bool swap_translation_axes = false;
+  // 实车前后、左右均反向时启用；仅反转平移，不改变旋转指令。
+  bool reverse_translation_axes = false;
 };
 
 struct ChassisControlInput {
@@ -138,7 +143,12 @@ public:
       d = 0.5 * (d + radius_sq / d);
     // 单位切向为(b/d, +/-a/d)。将轮心速度(vx-w*y,vy+w*x)投影至切向。
     // 正方形底盘的两个平移系数均为1/sqrt(2)，转动系数为轮心半径d。
-    const double forward = (b / d) * vx, left = (a / d) * vy;
+    // 只校正进入轮速解算的平移分量，w及对外的底盘坐标诊断保持原定义。
+    const double translation_sign = p.reverse_translation_axes ? -1.0 : 1.0;
+    const double wheel_vx = translation_sign * (p.swap_translation_axes ? vy : vx);
+    const double wheel_vy = translation_sign * (p.swap_translation_axes ? vx : vy);
+    const double forward = (b / d) * wheel_vx;
+    const double left = (a / d) * wheel_vy;
     const double turn = d * body.w;
     const double r = p.wheel_radius_m;
     const std::array<double, 4> wheels{(forward - left - turn) / r,

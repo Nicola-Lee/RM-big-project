@@ -2,7 +2,7 @@
  * @Author: Nicola Lee nlee15428@gmail.com
  * @Date: 2026-10-07 13:04:26
  * @LastEditors: Nicola Lee nlee15428@gmail.com
- * @LastEditTime: 2026-11-03 19:07:15
+ * @LastEditTime: 2026-11-04 23:41:33
  * @FilePath: \omni_skeleton\Chassis\Instance\component\ins_robot.cpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -46,7 +46,7 @@ robot::Robot *GetRobot() {
     params.linear_accel_m_s2=0.3f;
     params.angular_accel_rad_s2=0.5f;
     // 底盘跟随PID参数
-    params.follow_pid={.kp=0.0f, .ki=0.0f, .kd=0.0f,
+    params.follow_pid={.kp=10.0f, .ki=0.0f, .kd=0.0f,
       .integral_limit=0.1f,.output_limit=0.5f};
 
     return controller.init(params,GetChassis(),GetImu(),GetGimbalChassisComm());
@@ -62,9 +62,13 @@ robot::Chassis *GetChassis() {
     params.wheel_radius_m = 0.07786f;
     params.half_length_m = 0.15338f;
     params.half_width_m = 0.15338f;
+    // 实车平移轴互换，在云台到车体坐标变换之后应用。
+    params.swap_translation_axes = true;
+    // 互换后实测前后、左右均反向，统一反转两个平移分量。
+    params.reverse_translation_axes = true;
     params.max_wheel_speed_rad_s = 10.0f;
     // 前馈
-    params.velocity_feedforward_gain = {45.0f, 45.0f, 45.0f, 45.0f};
+    params.velocity_feedforward_gain = {95.0f, 95.0f, 95.0f, 95.0f};//空载时参数为45
     robot::Chassis::Motors motors{};
     robot::Chassis::Pids pids{};
     for (int i = 0; i < 4; ++i) {

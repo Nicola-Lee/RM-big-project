@@ -8,6 +8,7 @@
 
 namespace robot::gimbal_debug {
 Snapshot g_gimbal_debug_snapshot{};
+Snapshot g_gimbal_debug_stop_snapshot{};
 std::array<Snapshot, kEnabled ? kTraceCapacity : 1> g_gimbal_debug_trace{};
 uint32_t g_gimbal_debug_trace_count = 0;
 
@@ -23,10 +24,13 @@ Timing timing;
 float pitch_hold_rad = 0;
 float pitch_goal_rad = 0;
 float yaw_goal_rad = 0;
+float yaw_center_rad = 0;
+uint32_t yaw_started_ms = 0;
 std::array<uint32_t, 2> last_enable_ms{};
 std::array<bool, 2> enable_sent{};
 uint32_t last_sample_ms = 0;
 bool was_controlling = false;
+State last_observed_state = State::Waiting;
 
 bool RemoteSafe(RemoteControlSnapshot &remote) {
   if (!GetRemoteControlSnapshot(remote)) {
@@ -52,6 +56,13 @@ bool ConfigurationReady() {
     const float required_rate = PitchSineMaxRateRadS();
     if (!control::Finite(required_rate) ||
         required_rate > gimbal->pitchTargetRateLimit()) {
+      return false;
+    }
+  }
+  if (need_yaw && kYawWaveform == YawWaveform::Sine) {
+    const float required_rate = YawSineMaxRateRadS();
+    if (!control::Finite(required_rate) ||
+        required_rate > gimbal->yawTargetRateLimit()) {
       return false;
     }
   }
@@ -91,6 +102,7 @@ void Observe(uint32_t now, const GimbalMotorFeedbackSnapshot &feedback) {
   snapshot.reason = flow.reason;
   snapshot.session = flow.session;
   snapshot.elapsed_ms = g_gimbal_debug_snapshot.elapsed_ms;
+  snapshot.yaw_center_rad = yaw_center_rad;
   snapshot.pitch_hold_rad = pitch_hold_rad;
   snapshot.pitch_actual_rad = feedback.angle.pitch;
   snapshot.pitch_error_rad = pitch_hold_rad - feedback.angle.pitch;
@@ -116,9 +128,22 @@ void Observe(uint32_t now, const GimbalMotorFeedbackSnapshot &feedback) {
       snapshot.feedforward_nm = result.yaw_feedforward_nm;
       snapshot.torque_nm = result.yaw_torque_nm;
       snapshot.output_limited = result.yaw_output_limited;
+      if (flow.yawControl()) {
+        // 相对中心显示，绝对角跨过±pi时仍可连续观察±60度曲线。
+        snapshot.yaw_relative_target_rad = control::Wrap(result.target.yaw - yaw_center_rad);
+        if (feedback.yaw_valid) {
+          snapshot.yaw_relative_actual_rad = control::Wrap(feedback.angle.yaw - yaw_center_rad);
+        }
+      }
     }
   }
   g_gimbal_debug_snapshot = snapshot;
+  // 记录进入停止状态时的反馈；后续失能导致反馈失效，不覆盖这份记录。
+  const bool stopped = flow.state == State::Fault || flow.state == State::Finished;
+  if (stopped && flow.state != last_observed_state) {
+    g_gimbal_debug_stop_snapshot = snapshot;
+  }
+  last_observed_state = flow.state;
   const bool test_running = flow.state == State::Running;
   const bool sample_due = g_gimbal_debug_trace_count == 0 ||
                           uint32_t(now - last_sample_ms) >= kTracePeriodMs;
@@ -225,15 +250,23 @@ void Update() {
     pitch_hold_rad = feedback.angle.pitch;
     pitch_goal_rad = PitchTargetRad(pitch_hold_rad, 0);
     yaw_goal_rad = 0.0f;
+    yaw_center_rad = 0.0f;
+    yaw_started_ms = 0;
     gimbal->stop();
   }
   if (flow.yaw_started_this_tick) {
-    yaw_goal_rad = control::Wrap(feedback.angle.yaw + kStepRad);
+    yaw_center_rad = feedback.angle.yaw;
+    yaw_started_ms = now;
+    yaw_goal_rad = YawTargetRad(yaw_center_rad, 0);
   }
   if (flow.pitchControl()) {
     if (kAxis == Axis::Pitch) {
       const uint32_t elapsed_ms = uint32_t(now - flow.started_ms);
       pitch_goal_rad = PitchTargetRad(pitch_hold_rad, elapsed_ms);
+    }
+    if (flow.yawControl()) {
+      const uint32_t elapsed_ms = uint32_t(now - yaw_started_ms);
+      yaw_goal_rad = YawTargetRad(yaw_center_rad, elapsed_ms);
     }
     GimbalControlInput control_input{};
     control_input.mode = GimbalMode::JointAngle;
@@ -247,8 +280,14 @@ void Update() {
       flow.fault(Reason::Control);
     }
   }
-  if (!flow.pitchControl()) {
+  if (!flow.pitchEnable()) {
     Stop();
+  } else if (!flow.pitchControl()) {
+    // Preparing/Armed需要零转矩使能来持续获取反馈。
+    // 此处不能调用Stop()，否则会给pitch排队失能命令。
+    runtime::SetControlPermit(false);
+    gimbal->stop();
+    yaw->disable();
   }
   Observe(now, feedback);
 }
@@ -276,7 +315,9 @@ void Communicate() {
   } else if (flow.pitchControl()) {
     if (remote.rc_r_switch != 1) {
       flow.fault(Reason::Released);
-    } else if (!feedback.pitch_valid || !PositionSafe(feedback)) {
+    } else if (!feedback.pitch_valid) {
+      flow.fault(Reason::FeedbackTimeout);
+    } else if (!PositionSafe(feedback)) {
       flow.fault(Reason::PitchRange);
     } else if (peer.frame.code != uint8_t(Reply::Ready) ||
                peer.frame.session != flow.session) {
