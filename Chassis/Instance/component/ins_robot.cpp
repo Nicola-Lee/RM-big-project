@@ -2,7 +2,7 @@
  * @Author: Nicola Lee nlee15428@gmail.com
  * @Date: 2026-10-07 13:04:26
  * @LastEditors: Nicola Lee nlee15428@gmail.com
- * @LastEditTime: 2026-11-04 23:41:33
+ * @LastEditTime: 2026-11-06 22:31:04
  * @FilePath: \omni_skeleton\Chassis\Instance\component\ins_robot.cpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -44,10 +44,13 @@ robot::Robot *GetRobot() {
     params.max_axis_speed_m_s=0.3f;
     params.max_body_rate_rad_s=robot::limits::kMaxBodyRateRadS;
     params.linear_accel_m_s2=0.3f;
-    params.angular_accel_rad_s2=0.5f;
+    params.angular_accel_rad_s2=2.0f;
+    // 跟随输出上限保留1.2rad/s，小陀螺使用共享总上限。
     // 底盘跟随PID参数
-    params.follow_pid={.kp=10.0f, .ki=0.0f, .kd=0.0f,
-      .integral_limit=0.1f,.output_limit=0.5f};
+    params.follow_pid={.kp=4.0f, .ki=0.0f, .kd=0.0f,
+      .integral_limit=0.1f,.output_limit=1.2f};
+    // 跟随角速度输出低通：10ms试调起点；设为0.0f关闭。
+    params.follow_filter_tau_s = 0.01f;
 
     return controller.init(params,GetChassis(),GetImu(),GetGimbalChassisComm());
   }();

@@ -2,7 +2,7 @@
  * @Author: Nicola Lee nlee15428@gmail.com
  * @Date: 2026-09-19 15:52:24
  * @LastEditors: Nicola Lee nlee15428@gmail.com
- * @LastEditTime: 2026-11-04 23:23:52
+ * @LastEditTime: 2026-11-06 19:49:32
  * @FilePath: \omni_skeleton\Gimbal\Instance\component\ins_pid.cpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -55,7 +55,7 @@ hello_world::pid::Pid *GetPidMotorPitch() {
    * 返回 pitch 关节位置环 PID 单例，做法同 GetPidMotorYaw()。
    */
   static const hello_world::pid::PidParams params{
-      .kp = 56.0f, .ki = 0.0f, .kd = 0.0f,
+      .kp = 60.0f, .ki = 0.0f, .kd = 0.0f,//合适的是56 0 0
       .integral_limit = 0.05f,
       .output_limit = 0.8f
   };

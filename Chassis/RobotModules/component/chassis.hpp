@@ -123,7 +123,7 @@ public:
   }
 
   // 四角径向轮轴的全向轮：轮轴沿底盘中心到轮心，主滚动方向与轮轴垂直。
-  // 四轮正滚动方向均取带有+X分量的切向；电机dir负责对应实车正转方向。
+  // 未做轴校正时，四轮正滚动方向取带有+X分量的切向；电机dir对应实车方向。
   // 轮序 LF(+a,+b)、LB(-a,+b)、RB(-a,-b)、RF(+a,-b)。
   // 纯计算接口：不访问电机/PID，可用于静态检查或离线观察。
   static constexpr bool
@@ -143,18 +143,29 @@ public:
       d = 0.5 * (d + radius_sq / d);
     // 单位切向为(b/d, +/-a/d)。将轮心速度(vx-w*y,vy+w*x)投影至切向。
     // 正方形底盘的两个平移系数均为1/sqrt(2)，转动系数为轮心半径d。
-    // 只校正进入轮速解算的平移分量，w及对外的底盘坐标诊断保持原定义。
+    // 校正进入轮速解算的平移分量；旋转系数在下方应用同一组方向约定。
+    // body.w及对外的底盘坐标诊断保持原定义。
     const double translation_sign = p.reverse_translation_axes ? -1.0 : 1.0;
     const double wheel_vx = translation_sign * (p.swap_translation_axes ? vy : vx);
     const double wheel_vy = translation_sign * (p.swap_translation_axes ? vx : vy);
     const double forward = (b / d) * wheel_vx;
     const double left = (a / d) * wheel_vy;
     const double turn = d * body.w;
+    // 旋转项也必须匹配校正后的轮速正方向，数组依次对应ID1、2、3、4。
+    std::array<double, 4> rotation_sign{-1.0, -1.0, 1.0, 1.0};
+    if (p.swap_translation_axes) {
+      rotation_sign = {1.0, -1.0, -1.0, 1.0};
+    }
+    for (double &sign : rotation_sign) {
+      sign *= translation_sign;
+    }
+    // 当前实车：互换且反向，旋转符号为{-1,+1,+1,-1}。
     const double r = p.wheel_radius_m;
-    const std::array<double, 4> wheels{(forward - left - turn) / r,
-                                       (forward + left - turn) / r,
-                                       (forward - left + turn) / r,
-                                       (forward + left + turn) / r};
+    const std::array<double, 4> wheels{
+        (forward - left + rotation_sign[0] * turn) / r,
+        (forward + left + rotation_sign[1] * turn) / r,
+        (forward - left + rotation_sign[2] * turn) / r,
+        (forward + left + rotation_sign[3] * turn) / r};
     double peak = 0.0;
     for (double wheel : wheels) {
       const double magnitude = wheel < 0.0 ? -wheel : wheel;

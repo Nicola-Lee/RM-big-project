@@ -2,7 +2,7 @@
  * @Author: Nicola Lee nlee15428@gmail.com
  * @Date: 2026-10-07 13:04:26
  * @LastEditors: Nicola Lee nlee15428@gmail.com
- * @LastEditTime: 2026-11-04 23:22:50
+ * @LastEditTime: 2026-11-06 22:05:57
  * @FilePath: \omni_skeleton\Gimbal\Instance\component\ins_robot.cpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -52,8 +52,10 @@ robot::Robot *GetRobot() {
     params.max_forward_m_s=0.3f;
     params.max_left_m_s=0.3f;
     params.max_manual_body_rate_rad_s=0.5f;
-    params.max_spin_rate_rad_s=0.5f;
-    params.max_yaw_input_rate_rad_s=0.3f;
+    // 小陀螺模式拨轮满幅为2rad/s；拨轮回中仍然停止旋转。
+    params.max_spin_rate_rad_s=2.0f;
+    // 右摇杆水平满幅：枪口期望转速1rad/s（约57.3度/s）。
+    params.max_yaw_input_rate_rad_s=1.0f;
     params.max_pitch_input_rate_rad_s=0.3f;
     // 恢复时先回中100ms，再进行双方就绪握手，防止恢复即追赶旧摇杆请求。
     params.require_neutral_on_recovery=true;
@@ -74,14 +76,15 @@ robot::Gimbal *GetGimbal() {
     params.pitch_min_rad = -0.5235988f;
     params.pitch_max_rad = +0.5235988f;
     // 目标变化率（rad/s）和模块转矩上限（N*m）
-    params.yaw_target_rate_rad_s = 1.0f;
+    // 覆盖底盘上限2.0 + 操作手输入1.0，并留0.2rad/s目标余量。
+    params.yaw_target_rate_rad_s = 3.2f;
     params.pitch_target_rate_rad_s = 0.3f;
     params.yaw_torque_limit_nm = 0.3f;
     params.pitch_torque_limit_nm = 0.8f;
     // 云台轴前馈和重力补偿系数
-    params.yaw_velocity_ff = 1.0f;
+    params.yaw_velocity_ff = 1.2f;
     params.pitch_velocity_ff = 0.0f;
-    params.pitch_gravity_cos_nm = 0.5f;
+    params.pitch_gravity_cos_nm = 0.6f;//与PID对应合适的是0.6，无法解决卡顿问题
     params.pitch_gravity_sin_nm = 0.0f;
     // 两个 GetMotor 函数实际都返回 DM_J4310，这里转换为达妙基类使用状态接口。
     auto *yaw = static_cast<hello_world::motor::DM_J4310 *>(GetMotorYaw());
