@@ -19,7 +19,10 @@ constexpr std::array<uint16_t,5> Channels(const Frame &d){
    uint16_t(((d[4]>>1)|(d[5]<<7))&0x7FF),uint16_t(d[16]|(d[17]<<8))};
 }
 constexpr bool Valid(const Frame &d){
- for(auto c:Channels(d))if(c<364||c>1684)return false;
+ for(auto c:Channels(d))
+ {
+  if(c<364||c>1684)return false;
+ }
  return ((d[5]>>6)&3)!=0&&((d[5]>>4)&3)!=0&&d[12]<=1&&d[13]<=1;
 }
 constexpr bool Stopped(const Frame &d){return ((d[5]>>4)&3)==2;}

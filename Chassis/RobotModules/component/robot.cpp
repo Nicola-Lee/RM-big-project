@@ -61,7 +61,10 @@ bool Robot::paramsReady() const {
          Positive(params_.max_body_rate_rad_s) &&
          params_.max_body_rate_rad_s <= board_protocol::kMaxVelocity &&
          Positive(params_.linear_accel_m_s2) && Positive(params_.angular_accel_rad_s2) &&
-         control::Finite(params_.follow_filter_tau_s) && params_.follow_filter_tau_s >= 0.0f;
+         control::Finite(params_.follow_filter_tau_s) && params_.follow_filter_tau_s >= 0.0f &&
+         Positive(params_.follow_align_enter_rad) &&
+         params_.follow_align_enter_rad < params_.follow_align_exit_rad &&
+         params_.follow_align_exit_rad < control::kPi;
 }
 
 void Robot::resetControl() {
@@ -69,6 +72,7 @@ void Robot::resetControl() {
     chassis_->stop();
   follow_pid_.reset();
   follow_rate_filter_.reset();
+  follow_alignment_.reset();
   last_command_ = {};
   last_mode_ = ChassisMode::Disabled;
   ever_active_ = false;
@@ -152,6 +156,7 @@ void Robot::update(float dt) {
     if (mode != last_mode_) {
       follow_pid_.reset();
       follow_rate_filter_.reset();
+      follow_alignment_.reset();
       has_follow_error_ = false;
       last_command_ = {};
       last_mode_ = mode;
@@ -168,49 +173,78 @@ void Robot::update(float dt) {
         control::Clamp(request.vy, -params_.max_axis_speed_m_s, params_.max_axis_speed_m_s),
         params_.linear_accel_m_s2,
         dt);
-    float w = request.w;
+    float requested_rate = request.w;
+    bool follow_aligned = false;
+
     if (mode == ChassisMode::Follow) {
-      const float e = control::Wrap(peer.data.feedback.yaw);
-      if (has_follow_error_ && control::Abs(e - last_follow_error_) > control::kPi) {
+      const float yaw_error = control::Wrap(peer.data.feedback.yaw);
+
+      // 误差跨过±π时，清除上一侧的PID和滤波历史。
+      if (has_follow_error_ &&
+          control::Abs(yaw_error - last_follow_error_) > control::kPi) {
         follow_pid_.reset();
         follow_rate_filter_.reset();
       }
-      w = follow_pid_.calculateError(e, dt);
-      last_follow_error_ = e;
+
+      follow_aligned = follow_alignment_.update(
+          yaw_error,
+          imu.gyro[2],
+          now,
+          peer.age_ms,
+          params_.follow_align_enter_rad,
+          params_.follow_align_exit_rad);
+
+      if (follow_aligned) {
+        follow_pid_.reset();
+        requested_rate = 0.0f;
+      } else {
+        requested_rate = follow_pid_.calculateError(yaw_error, dt);
+      }
+
+      last_follow_error_ = yaw_error;
       has_follow_error_ = true;
     } else if (mode != ChassisMode::Separate && mode != ChassisMode::Spin) {
       active = false;
     }
-    const float bounded =
-        control::Clamp(w, -params_.max_body_rate_rad_s, params_.max_body_rate_rad_s);
-    if (mode == ChassisMode::Follow && bounded != w)
+
+    const float limited_rate = control::Clamp(
+        requested_rate, -params_.max_body_rate_rad_s, params_.max_body_rate_rad_s);
+    if (mode == ChassisMode::Follow && limited_rate != requested_rate) {
       follow_pid_.reset();
-    // 仅跟随模式滤波；分离/小陀螺继续使用原来的角速度请求。
-    float rate_target = bounded;
-    if (mode == ChassisMode::Follow) {
-      rate_target = follow_rate_filter_.update(bounded, params_.follow_filter_tau_s, dt);
     }
-    next.w = control::Slew(last_command_.w, rate_target, params_.angular_accel_rad_s2, dt);
-    // 全零平移请求的停车行为保持原样；跟随误差过零不等于急停。
-    if (request.vx == 0.0f && request.vy == 0.0f && bounded == 0.0f) {
-      if (mode == ChassisMode::Follow) {
+
+    // 跟随角速度先低通，再通过角加速度限制。
+    float rate_target = limited_rate;
+    if (mode == ChassisMode::Follow) {
+      rate_target = follow_rate_filter_.update(limited_rate, params_.follow_filter_tau_s, dt);
+    }
+    next.w = control::Slew(
+        last_command_.w, rate_target, params_.angular_accel_rad_s2, dt);
+
+    const bool no_translation = request.vx == 0.0f && request.vy == 0.0f;
+    if (mode == ChassisMode::Follow && limited_rate == 0.0f) {
+      // 对齐且仍有角度误差时，只让旋转停下，平移继续沿自身斜坡减速。
+      if (no_translation && (!follow_aligned || last_follow_error_ == 0.0f)) {
         next.vx = 0.0f;
         next.vy = 0.0f;
-        // 保留上面算出的next.w，让零误差也经过低通和角加速度限制。
-        // 仅在滤波尾值极小且本周期可平滑停稳时，收敛到精确零。
-        constexpr float kFollowStoppedRateRadS = 0.000001f;
-        const float max_rate_step = params_.angular_accel_rad_s2 * dt;
-        if (control::Abs(rate_target) <= kFollowStoppedRateRadS &&
-            control::Abs(last_command_.w) <= max_rate_step) {
-          next.w = 0.0f;
-          follow_rate_filter_.reset();
-        }
-      } else {
-        // 分离/小陀螺保留全零请求立即停车，不沿用减速斜坡。
-        next = {};
+      }
+
+      // 滤波尾值足够小，而且本周期能在限加速度内停稳时，才把角速度置零。
+      constexpr float kFollowStoppedRateRadS = 0.000001f;
+      const float max_rate_step = params_.angular_accel_rad_s2 * dt;
+      if ((follow_aligned || no_translation) &&
+          control::Abs(rate_target) <= kFollowStoppedRateRadS &&
+          control::Abs(last_command_.w) <= max_rate_step) {
+        next.w = 0.0f;
         follow_rate_filter_.reset();
       }
+    } else if (mode != ChassisMode::Follow &&
+               no_translation &&
+               limited_rate == 0.0f) {
+      next = {};
+      follow_rate_filter_.reset();
     }
+
     ChassisControlInput input{};
     input.command = next;
     input.relative_yaw_rad = peer.data.feedback.yaw;
@@ -231,6 +265,7 @@ void Robot::update(float dt) {
     // 未获运行许可直接停车，不让低通历史延长输出。
     chassis_->stop();
     follow_rate_filter_.reset();
+    follow_alignment_.reset();
   }
   action_ = diagnostic_.active
                 ? control::MotorAction::Control

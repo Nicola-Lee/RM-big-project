@@ -46,11 +46,20 @@ robot::Robot *GetRobot() {
     params.linear_accel_m_s2=0.3f;
     params.angular_accel_rad_s2=2.0f;
     // 跟随输出上限保留1.2rad/s，小陀螺使用共享总上限。
-    // 底盘跟随PID参数
-    params.follow_pid={.kp=4.0f, .ki=0.0f, .kd=0.0f,
-      .integral_limit=0.1f,.output_limit=1.2f};
-    // 跟随角速度输出低通：10ms试调起点；设为0.0f关闭。
+    params.follow_pid = {
+      .kp = 4.0f,
+      .ki = 0.0f,
+      .kd = 0.0f,
+      .integral_limit = 0.1f,
+      .output_limit = 1.2f,
+    };
+
+    // 跟随角速度低通，单位为秒。设为0关闭。
     params.follow_filter_tau_s = 0.01f;
+
+    // 对齐进入角为1度，退出角为2度。参数单位为rad。
+    params.follow_align_enter_rad = robot::control::kPi / 180.0f;
+    params.follow_align_exit_rad = 2.0f * robot::control::kPi / 180.0f;
 
     return controller.init(params,GetChassis(),GetImu(),GetGimbalChassisComm());
   }();
